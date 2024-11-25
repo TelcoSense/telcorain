@@ -1,2 +1,2 @@
-# telcorain-core
-Python package for opportunistic sensing CML data processing.
+# telcorain
+Python package for opportunistic sensing via CML data processing.
