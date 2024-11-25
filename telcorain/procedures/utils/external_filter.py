@@ -1,22 +1,41 @@
 import hashlib
-from io import BytesIO
 import os
-from PIL import Image
-from typing import cast, Iterable, Optional
+from io import BytesIO
+from typing import Iterable, Optional, cast
 
 import numpy as np
 import requests
+from PIL import Image
 from scipy.ndimage import label
 
-from handlers import config_handler
-
+from ...handlers import config_handler
 
 BLACK_INDEX = [0]  # Upper text color
-RED_INDEX = [122, 123, 124, 125, 126, 141, 162, 166, 167, 182, 183, 184, 185, 186, 187, 212, 216]  # Bottom text color
+RED_INDEX = [
+    122,
+    123,
+    124,
+    125,
+    126,
+    141,
+    162,
+    166,
+    167,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    212,
+    216,
+]  # Bottom text color
 GREY_INDEX = [242]  # Unknown area color
 
 # Maximum number of history fetch steps attempts
-MAX_HISTORY_LOOKUPS = int(config_handler.read_option("external_filter", "max_history_lookups"))
+MAX_HISTORY_LOOKUPS = int(
+    config_handler.read_option("external_filter", "max_history_lookups")
+)
 # Prefix of the image filenames
 FILENAME_PREFIX = config_handler.read_option("external_filter", "file_prefix")
 # Directory where cached images will be stored
@@ -65,15 +84,15 @@ def _fetch_image(dt64: np.datetime64, img_url: str, url_prefix: str) -> Optional
 
 
 def _detect_active_pixels(
-        img_bytes: bytes,
-        point_x: float,
-        point_y: float,
-        radius_km: float,
-        pixel_threshold: int,
-        img_x_min: float,
-        img_x_max: float,
-        img_y_min: float,
-        img_y_max: float
+    img_bytes: bytes,
+    point_x: float,
+    point_y: float,
+    radius_km: float,
+    pixel_threshold: int,
+    img_x_min: float,
+    img_x_max: float,
+    img_y_min: float,
+    img_y_max: float,
 ) -> bool:
     """
     Check if there are colored pixels in cluster in the specified area around the given point in the map.
@@ -103,9 +122,9 @@ def _detect_active_pixels(
     # Y-axis coordinate needs to be inverted because higher latitudes are lower on the image
     point_px_y = pixels.shape[0] - int((point_y - img_y_min) * scale_y)
 
-    diagonal_km_per_pixel = np.sqrt(((img_x_max - img_x_min) * 111) ** 2 +
-                                    ((img_y_max - img_y_min) * 111) ** 2) / np.sqrt(
-        pixels.shape[0] ** 2 + pixels.shape[1] ** 2)
+    diagonal_km_per_pixel = np.sqrt(
+        ((img_x_max - img_x_min) * 111) ** 2 + ((img_y_max - img_y_min) * 111) ** 2
+    ) / np.sqrt(pixels.shape[0] ** 2 + pixels.shape[1] ** 2)
     radius_px = int(radius_km / diagonal_km_per_pixel)
 
     excluded_indices = [*BLACK_INDEX, *RED_INDEX, *GREY_INDEX, transparency]
@@ -117,7 +136,7 @@ def _detect_active_pixels(
     search_area_mask = np.zeros_like(pixels, dtype=bool)
     for y in range(pixels.shape[0]):
         for x in range(pixels.shape[1]):
-            if (x - point_px_x) ** 2 + (y - point_px_y) ** 2 <= radius_px ** 2:
+            if (x - point_px_x) ** 2 + (y - point_px_y) ** 2 <= radius_px**2:
                 search_area_mask[y, x] = True
 
     labels_in_radius = np.unique(labeled_array[search_area_mask])
@@ -132,18 +151,18 @@ def _detect_active_pixels(
 
 
 def determine_wet(
-        sample_timestamp: np.datetime64,
-        point_x: float,
-        point_y: float,
-        radius_km: float,
-        pixel_threshold: int,
-        img_x_min: float,
-        img_x_max: float,
-        img_y_min: float,
-        img_y_max: float,
-        url_prefix: str,
-        default_return: bool = True,
-        forward_look: bool = False
+    sample_timestamp: np.datetime64,
+    point_x: float,
+    point_y: float,
+    radius_km: float,
+    pixel_threshold: int,
+    img_x_min: float,
+    img_x_max: float,
+    img_y_min: float,
+    img_y_max: float,
+    url_prefix: str,
+    default_return: bool = True,
+    forward_look: bool = False,
 ) -> bool:
     def timestamp_to_filename(ts: np.datetime64):
         """Helper function to format the numpy datetime64 timestamp into image filename format."""
@@ -154,30 +173,54 @@ def determine_wet(
     # Convert to minutes and round down to the nearest multiple of 10
     minutes_since_epoch = sample_timestamp.astype("datetime64[m]").astype(int)
     rounded_minutes_since_epoch = (minutes_since_epoch // 10) * 10
-    lower_timestamp = np.datetime64("1970-01-01T00:00:00") + np.timedelta64(int(rounded_minutes_since_epoch), "m")
+    lower_timestamp = np.datetime64("1970-01-01T00:00:00") + np.timedelta64(
+        int(rounded_minutes_since_epoch), "m"
+    )
 
     history_lookup = 1
-    img_raw = _fetch_image(lower_timestamp, timestamp_to_filename(lower_timestamp), url_prefix)
+    img_raw = _fetch_image(
+        lower_timestamp, timestamp_to_filename(lower_timestamp), url_prefix
+    )
 
     while img_raw is None and history_lookup < MAX_HISTORY_LOOKUPS:
         lower_timestamp -= delta_10
         history_lookup += 1
-        img_raw = _fetch_image(lower_timestamp, timestamp_to_filename(lower_timestamp), url_prefix)
+        img_raw = _fetch_image(
+            lower_timestamp, timestamp_to_filename(lower_timestamp), url_prefix
+        )
 
     if img_raw is not None:
         prev_wet_state = _detect_active_pixels(
-            img_raw, point_x, point_y, radius_km, pixel_threshold, img_x_min, img_x_max, img_y_min, img_y_max
+            img_raw,
+            point_x,
+            point_y,
+            radius_km,
+            pixel_threshold,
+            img_x_min,
+            img_x_max,
+            img_y_min,
+            img_y_max,
         )
     else:
         prev_wet_state = default_return
 
     if forward_look:
         higher_timestamp = lower_timestamp + (delta_10 * history_lookup)
-        img_raw = _fetch_image(higher_timestamp, timestamp_to_filename(higher_timestamp), url_prefix)
+        img_raw = _fetch_image(
+            higher_timestamp, timestamp_to_filename(higher_timestamp), url_prefix
+        )
 
         if img_raw is not None:
             next_wet_state = _detect_active_pixels(
-                img_raw, point_x, point_y, radius_km, pixel_threshold, img_x_min, img_x_max, img_y_min, img_y_max
+                img_raw,
+                point_x,
+                point_y,
+                radius_km,
+                pixel_threshold,
+                img_x_min,
+                img_x_max,
+                img_y_min,
+                img_y_max,
             )
         else:
             next_wet_state = default_return
@@ -203,9 +246,11 @@ def __get_color_indices(img_path):
 
     # Find the index for black, red, and the specific shade of grey (196,196,196)
     black_index = np.where(np.all(palette_array == [0, 0, 0], axis=1))[0][0]
-    red_indices = np.where((palette_array[:, 0] > palette_array[:, 1]) &
-                           (palette_array[:, 0] > palette_array[:, 2]) &
-                           (palette_array[:, 0] > 100))[0]
+    red_indices = np.where(
+        (palette_array[:, 0] > palette_array[:, 1])
+        & (palette_array[:, 0] > palette_array[:, 2])
+        & (palette_array[:, 0] > 100)
+    )[0]
     specific_grey_index = np.where(np.all(palette_array == [196, 196, 196], axis=1))[0]
 
     return black_index, red_indices, specific_grey_index

@@ -8,10 +8,10 @@ import mariadb
 from mariadb import Cursor
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
-from database.models.mwlink import MwLink
-from handlers import config_handler
-from handlers.logging_handler import logger
-from procedures.utils.helpers import calc_distance
+from ..handlers import config_handler
+from ..handlers.logging_handler import logger
+from ..procedures.utils.helpers import calc_distance
+from .models.mwlink import MwLink
 
 
 class SqlManager:
@@ -22,7 +22,7 @@ class SqlManager:
     # Do not spam log with error messages
     is_error_sent = False
 
-    def __init__(self):
+    def __init__(self, min_length: float = 0.0):
         super(SqlManager, self).__init__()
         # Load settings from config file via ConfigurationManager
         self.settings = config_handler.load_sql_config()
@@ -33,6 +33,8 @@ class SqlManager:
 
         # current realtime params DB ID
         self.realtime_params_id = 0
+        # filter out short links
+        self.min_length = min_length
 
     def connect(self):
         """
@@ -141,7 +143,7 @@ class SqlManager:
                         latitude_A, longitude_A, latitude_B, longitude_B
                     )
 
-                    if link_length < 0.5:
+                    if link_length < self.min_length:
                         continue  # TODO temporarily skip links shorter than 300 meters
 
                     link = MwLink(

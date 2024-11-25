@@ -3,7 +3,7 @@
 import configparser
 from os.path import exists
 
-from handlers.exceptions import ConfigOptionNotFound
+from .exceptions import ConfigOptionNotFound
 
 
 class ConfigHandler:

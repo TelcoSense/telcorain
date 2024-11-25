@@ -1,4 +1,5 @@
-from math import sin, cos, sqrt, atan2, radians
+from datetime import datetime, timezone
+from math import atan2, cos, radians, sin, sqrt
 
 import numpy as np
 
@@ -37,6 +38,30 @@ def dt64_to_unixtime(dt64: np.datetime64) -> int:
     :param dt64: numpy datetime64
     :return: number of seconds since Unix epoch
     """
-    unix_epoch = np.datetime64(0, 's')
-    s = np.timedelta64(1, 's')
+    unix_epoch = np.datetime64(0, "s")
+    s = np.timedelta64(1, "s")
     return int((dt64 - unix_epoch) / s)
+
+
+def utc_datetime(
+    year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0
+) -> datetime:
+    return datetime(
+        year=year,
+        month=month,
+        day=day,
+        hour=hour,
+        minute=minute,
+        second=second,
+        tzinfo=timezone.utc,
+    )
+
+
+def datetime_rfc(dt: datetime) -> str:
+    """
+    Convert datetime to string compliant with the RFC 3339
+
+    :param dt: Python datetime object
+    :return: RFC compliant datetime string
+    """
+    return dt.isoformat().replace("+00:00", "Z")

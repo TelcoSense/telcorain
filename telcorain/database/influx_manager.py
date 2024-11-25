@@ -1,5 +1,5 @@
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from threading import Thread
 from typing import Union
@@ -9,8 +9,9 @@ from influxdb_client.domain.write_precision import WritePrecision
 from PyQt6.QtCore import QDateTime, QObject, QRunnable, pyqtSignal
 from urllib3.exceptions import ConnectTimeoutError, ReadTimeoutError
 
-from handlers import config_handler
-from handlers.logging_handler import logger
+from ..handlers import config_handler
+from ..handlers.logging_handler import logger
+from ..procedures.utils.helpers import datetime_rfc
 
 
 class BucketType(Enum):
@@ -70,7 +71,7 @@ class InfluxManager:
         self.BUCKET_NEW_TYPE: BucketType = bucket_new_type
         self.OLD_NEW_DATA_BORDER: datetime = datetime.strptime(
             data_border_string, data_border_format
-        )
+        ).replace(tzinfo=timezone.utc)
 
     def check_connection(self) -> bool:
         return self.client.ping()
@@ -166,7 +167,6 @@ class InfluxManager:
             "Vysilany_Vykon": "tx_power",
             "Signal": "rx_power",
         }
-
         for results in (results_slux, results_flux):
             for table in results:
                 ip = table.records[0].values.get("agent_host")
@@ -198,12 +198,48 @@ class InfluxManager:
                             data[ip]["rx_power"][record.get_time()] = 0.0
                         else:
                             data[ip][field_name][record.get_time()] = record.get_value()
-
         return data
 
+    # def query_units(
+    #     self, ips: list, start: QDateTime, end: QDateTime, interval: int
+    # ) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
+    #     """
+    #     Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
+    #     Query is done for the time interval defined by 'start' and 'end' QDateTime objects, with 'interval' in seconds.
+
+    #     :param ips: list of IP addresses of CMLs to query
+    #     :param start: QDateTime object with start of the query interval
+    #     :param end: QDateTime object with end of the query interval
+    #     :param interval: time interval in minutes
+    #     :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
+    #     """
+    #     # modify boundary times to be multiples of input time interval
+    #     start.addSecs(
+    #         (
+    #             (math.ceil((start.time().minute() + 0.1) / interval) * interval)
+    #             - start.time().minute()
+    #         )
+    #         * 60
+    #     )
+    #     end.addSecs((-1 * (end.time().minute() % interval)) * 60)
+
+    #     # convert params to query substrings
+    #     start_str = start.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
+    #     end_str = end.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
+    #     interval_str = f"{interval * 60}s"  # time in seconds
+
+    #     ips_str = f"{ips[0]}"  # IP addresses in query format
+    #     for ip in ips[1:]:
+    #         ips_str += f"|{ip}"
+
+    #     if end.toPyDateTime() < self.OLD_NEW_DATA_BORDER:
+    #         return self._raw_query_old_bucket(start_str, end_str, ips_str, interval_str)
+    #     else:
+    #         return self._raw_query_new_bucket(start_str, end_str, ips_str, interval_str)
+
     def query_units(
-        self, ips: list, start: QDateTime, end: QDateTime, interval: int
-    ) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
+        self, ips: list, start: datetime, end: datetime, interval: int
+    ) -> dict:
         """
         Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
         Query is done for the time interval defined by 'start' and 'end' QDateTime objects, with 'interval' in seconds.
@@ -214,26 +250,27 @@ class InfluxManager:
         :param interval: time interval in minutes
         :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
         """
+
         # modify boundary times to be multiples of input time interval
-        start.addSecs(
-            (
-                (math.ceil((start.time().minute() + 0.1) / interval) * interval)
-                - start.time().minute()
+        start += timedelta(
+            seconds=(
+                (math.ceil((start.minute + 0.1) / interval) * interval) - start.minute
             )
             * 60
         )
-        end.addSecs((-1 * (end.time().minute() % interval)) * 60)
+        end += timedelta(seconds=(-1 * (end.minute % interval)) * 60)
 
         # convert params to query substrings
-        start_str = start.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
-        end_str = end.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
+        start_str = datetime_rfc(start)
+        end_str = datetime_rfc(end)
+
         interval_str = f"{interval * 60}s"  # time in seconds
 
         ips_str = f"{ips[0]}"  # IP addresses in query format
         for ip in ips[1:]:
             ips_str += f"|{ip}"
 
-        if end.toPyDateTime() < self.OLD_NEW_DATA_BORDER:
+        if end < self.OLD_NEW_DATA_BORDER:
             return self._raw_query_old_bucket(start_str, end_str, ips_str, interval_str)
         else:
             return self._raw_query_new_bucket(start_str, end_str, ips_str, interval_str)
