@@ -13,11 +13,7 @@ from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import sql_man
 from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
-from telcorain.handlers.realtime_writer import (
-    mask_grid,
-    ndarray_to_png,
-    save_ndarray_to_file,
-)
+from telcorain.handlers.writer import mask_grid, ndarray_to_png, save_ndarray_to_file
 from telcorain.procedures.calculation import Calculation
 from telcorain.procedures.utils.helpers import dt64_to_unixtime
 

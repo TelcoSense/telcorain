@@ -1,3 +1,7 @@
 *.pyc
-*.ini
 /image_cache
+/outputs_raw
+/outputs_web
+/logs
+
+config.ini

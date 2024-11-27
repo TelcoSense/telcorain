@@ -499,7 +499,3 @@ class SqlSignals(QObject):
     """
 
     ping_signal = pyqtSignal(bool)
-
-
-# global instance of SqlManager, accessible from all modules
-sql_man = SqlManager()

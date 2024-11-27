@@ -1,7 +1,10 @@
+import configparser
 from datetime import datetime, timezone
 from math import atan2, cos, radians, sin, sqrt
 
 import numpy as np
+
+from telcorain.database.models.mwlink import MwLink
 
 
 def calc_distance(lat_A: float, long_A: float, lat_B: float, long_B: float) -> float:
@@ -65,3 +68,50 @@ def datetime_rfc(dt: datetime) -> str:
     :return: RFC compliant datetime string
     """
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def cast_value(value):
+    """
+    Tries to cast the value to an appropriate type.
+    Priority: int > float > bool > string
+    """
+    if value.lower() in ("true", "false"):  # Handle booleans
+        return value.lower() == "true"
+    try:
+        return int(value)  # Try casting to int
+    except ValueError:
+        pass
+    try:
+        return float(value)  # Try casting to float
+    except ValueError:
+        pass
+    return value  # Default to string if no other type matches
+
+
+def create_cp_dict(path: str) -> dict:
+    config = configparser.ConfigParser()
+    config.read(path)
+    cp = {}
+    for section in config.sections():
+        cp[section] = {key: cast_value(value) for key, value in config.items(section)}
+    cp["time"]["start"] = datetime.fromisoformat(cp["time"]["start"]).replace(
+        tzinfo=timezone.utc
+    )
+    cp["time"]["end"] = datetime.fromisoformat(cp["time"]["end"]).replace(
+        tzinfo=timezone.utc
+    )
+    return cp
+
+
+def select_all_links(links: list[MwLink]) -> dict[int, int]:
+    selected_links = {}
+    for link in links:
+        selected_links[links[link].link_id] = 3
+    return selected_links
+
+
+def select_links(link_ids: list[int]) -> dict[int, int]:
+    selected_links = {}
+    for link_id in link_ids:
+        selected_links[link_id] = 3
+    return selected_links

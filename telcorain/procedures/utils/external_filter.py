@@ -32,18 +32,18 @@ RED_INDEX = [
 ]  # Bottom text color
 GREY_INDEX = [242]  # Unknown area color
 
-# Maximum number of history fetch steps attempts
-MAX_HISTORY_LOOKUPS = int(
-    config_handler.read_option("external_filter", "max_history_lookups")
-)
-# Prefix of the image filenames
-FILENAME_PREFIX = config_handler.read_option("external_filter", "file_prefix")
-# Directory where cached images will be stored
-CACHE_DIR = config_handler.read_option("directories", "ext_filter_cache")
+# # Maximum number of history fetch steps attempts
+# MAX_HISTORY_LOOKUPS = int(
+#     config_handler.read_option("external_filter", "max_history_lookups")
+# )
+# # Prefix of the image filenames
+# FILENAME_PREFIX = config_handler.read_option("external_filter", "file_prefix")
+# # Directory where cached images will be stored
+# CACHE_DIR = config_handler.read_option("directories", "ext_filter_cache")
 
 
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+# if not os.path.exists(CACHE_DIR):
+#     os.makedirs(CACHE_DIR)
 
 
 def _get_cache_path(dt64: np.datetime64, img_url: str) -> str:

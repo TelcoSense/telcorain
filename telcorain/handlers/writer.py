@@ -1,4 +1,4 @@
-"""Module containing the RealtimeWriter class for writing results of the real-time calculation."""
+"""Module containing the Writer class for writing results of the calculation."""
 
 import json
 import os
@@ -21,12 +21,11 @@ from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import dt64_to_unixtime
 
 
-class RealtimeWriter:
+class Writer:
     """
-    Class for writing results of the real-time calculation (or forced write of historic results)
-    into the database and outputs directory.
+    Class for writing results of the calculation into the database and outputs directory.
 
-    Raingrid metadata are written into MariaDB.
+    Raingrid metadata can be written into MariaDB.
     The raingrids themselves are saved as PNG images in the outputs directory, from where they are then served by
     Telcorain's HTTP server (if enabled) to the web application (or other clients).
     Also, raw numpy NPY files are saved in the outputs_raw directory, which are then processed by the HTTP REST API
@@ -42,7 +41,9 @@ class RealtimeWriter:
         influx_man: InfluxManager,
         write_historic: bool,
         skip_influx: bool,
+        skip_sql: bool,
         since_time: datetime,
+        cp: dict,
         influx_wipe_thread: Optional[Thread] = None,
     ):
         """
@@ -52,21 +53,21 @@ class RealtimeWriter:
         :param write_historic: flag for writing historic results, overwriting the since_time parameter
         :param skip_influx: flag for skipping InfluxDB timeseries writing
         :param since_time: time since last realtime calculation start (overwritten by historic write)
+        :param cp: calculation params dictionary
         :param influx_wipe_thread: a thread with InfluxDB wiping activity for checking if it is done (if forced write)
         """
         self.sql_man = sql_man
         self.influx_man = influx_man
         self.write_historic = write_historic
         self.skip_influx = skip_influx
+        self.skip_sql = skip_sql
         self.since_time = since_time
         self.influx_wipe_thread = influx_wipe_thread
-
-        self.is_crop_enabled = config_handler.read_option(
-            "realtime", "crop_to_geojson_polygon"
-        )
-        self.geojson_file = config_handler.read_option("realtime", "geojson")
-        self.output_dir = config_handler.read_option("directories", "outputs_web")
-        self.outputs_raw_dir = config_handler.read_option("directories", "outputs_raw")
+        self.cp = cp
+        self.is_crop_enabled = self.cp["rendering"]["is_crop_enabled"]
+        self.geojson_file = self.cp["rendering"]["geojson_file"]
+        self.output_dir = self.cp["directories"]["outputs_web"]
+        self.outputs_raw_dir = self.cp["directories"]["outputs_raw"]
 
     def _write_raingrids(
         self,
@@ -117,20 +118,23 @@ class RealtimeWriter:
                 r_median_value = np.nanmedian(rain_grids[t])
                 r_avg_value = np.nanmean(rain_grids[t])
                 r_max_value = np.nanmax(rain_grids[t])
-                logger.debug(
-                    "[WRITE] Writing raingrid's %s metadata into MariaDB...",
-                    formatted_time,
-                )
-                self.sql_man.insert_raingrid(
-                    time=raingrid_time,
-                    links=raingrid_links,
-                    file_name=f"{file_name}.png",
-                    r_median=r_median_value,
-                    r_avg=r_avg_value,
-                    r_max=r_max_value,
-                )
+
+                if not self.skip_sql:
+                    logger.debug(
+                        "[WRITE] Writing raingrid's %s metadata into MariaDB...",
+                        formatted_time,
+                    )
+                    self.sql_man.insert_raingrid(
+                        time=raingrid_time,
+                        links=raingrid_links,
+                        file_name=f"{file_name}.png",
+                        r_median=r_median_value,
+                        r_avg=r_avg_value,
+                        r_max=r_max_value,
+                    )
 
                 rain_grid = rain_grids[t]
+
                 if self.is_crop_enabled:
                     logger.debug(
                         "[WRITE] Cropping raingrid %s to the GeoJSON polygon(s)...",
@@ -245,14 +249,23 @@ class RealtimeWriter:
             )
             return
 
-        last_record = self.sql_man.get_last_raingrid()
-        if len(last_record) > 0:
-            last_time = list(last_record.keys())[0]
+        if not self.skip_sql:
+            last_record = self.sql_man.get_last_raingrid()
+            if len(last_record) > 0:
+                last_time = list(last_record.keys())[0]
+            else:
+                last_time = datetime.min
         else:
             last_time = datetime.min
 
         np_last_time = np.datetime64(last_time)
         np_since_time = np.datetime64(self.since_time)
+
+        if not os.path.exists(self.output_dir):
+            os.mkdir(self.output_dir)
+
+        if not os.path.exists(self.outputs_raw_dir):
+            os.mkdir(self.outputs_raw_dir)
 
         # I. RAINGRIDS INTO MARIADB
         self._write_raingrids(

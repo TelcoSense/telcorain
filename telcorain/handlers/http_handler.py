@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from telcorain.database.sql_manager import sql_man
 from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
-from telcorain.handlers.realtime_writer import (
+from telcorain.handlers.writer import (
     read_from_ndarray_file,
     read_value_from_ndarray_file,
 )

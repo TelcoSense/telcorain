@@ -5,7 +5,6 @@ from typing import Optional, cast
 
 import matplotlib
 from app.results_canvas import Canvas
-from handlers.realtime_writer import RealtimeWriter
 from matplotlib import cm, colors
 from procedures.utils.helpers import dt64_to_unixtime
 from PyQt6 import QtCore, uic
@@ -20,6 +19,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from telcorain.handlers.writer import Writer
+
 matplotlib.use("QtAgg")
 
 
@@ -30,7 +31,7 @@ class ResultsWidget(QWidget):
         result_id: int,
         figs_path: str,
         cp: dict,
-        realtime_writer: Optional[RealtimeWriter],
+        realtime_writer: Optional[Writer],
     ):
         super(QWidget, self).__init__()
         self.tab_name = tab_name

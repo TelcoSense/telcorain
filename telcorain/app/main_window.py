@@ -10,7 +10,6 @@ from database.sql_manager import SqlChecker, SqlSignals, sql_man
 from handlers import config_handler
 from handlers.linksets_handler import LinksetsHandler
 from handlers.logging_handler import InitLogHandler, logger, setup_qt_logging
-from handlers.realtime_writer import RealtimeWriter, purge_raw_outputs
 
 # from lib.pycomlink.pycomlink.processing.wet_dry.cnn import \
 #     CNN_OUTPUT_LEFT_NANS_LENGTH
@@ -42,6 +41,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QWidget,
 )
+
+from telcorain.handlers.writer import Writer, purge_raw_outputs
 
 # TODO: move Control Tab elements into separate widget. Currently, this class contains main logic + Control Tab widgets.
 
@@ -571,7 +572,7 @@ class MainWindow(QMainWindow):
                         "[DEVMODE] ERASE DONE. New calculation data will be written."
                     )
 
-                realtime_w = RealtimeWriter(
+                realtime_w = Writer(
                     sql_man,
                     influx_man,
                     cp["is_history_write"],

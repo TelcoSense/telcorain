@@ -66,7 +66,7 @@ def get_rain_rates(
                                          according to the custom temperature compensation algorithm
             """
 
-            if cp["is_temp_filtered"]:
+            if cp["temp"]["is_temp_filtered"]:
                 logger.info("[%s] Remove-link procedure started.", log_run_id)
                 temperature_correlation.pearson_correlation(
                     count=count,
@@ -74,10 +74,10 @@ def get_rain_rates(
                     curr_link=current_link,
                     link_todelete=links_to_delete,
                     link=link,
-                    spin_correlation=cp["correlation_threshold"],
+                    spin_correlation=cp["temp"]["correlation_threshold"],
                 )
 
-            if cp["is_temp_compensated"]:
+            if cp["temp"]["is_temp_compensated"]:
                 logger.info(
                     "[%s] Compensation algorithm procedure started.", log_run_id
                 )
@@ -86,7 +86,7 @@ def get_rain_rates(
                     ips=ips,
                     curr_link=current_link,
                     link=link,
-                    spin_correlation=cp["correlation_threshold"],
+                    spin_correlation=cp["temp"]["correlation_threshold"],
                 )
 
             """
@@ -104,7 +104,7 @@ def get_rain_rates(
         current_link = 0
 
         for link in calc_data:
-            if cp["is_cnn_enabled"]:
+            if cp["wet_dry"]["is_mlp_enabled"]:
                 pass
                 # determine wet periods using CNN
                 # link['wet'] = (('time',), np.zeros([link.time.size]))
@@ -121,49 +121,50 @@ def get_rain_rates(
                 # determine wet periods using rolling standard deviation
                 link["wet"] = (
                     link.trsl.rolling(
-                        time=cp["rolling_values"], center=cp["is_window_centered"]
+                        time=cp["wet_dry"]["rolling_values"],
+                        center=cp["wet_dry"]["is_window_centered"],
                     ).std(skipna=False)
-                    > cp["wet_dry_deviation"]
+                    > cp["wet_dry"]["wet_dry_deviation"]
                 )
 
         # if cp['is_cnn_enabled']:
         #     # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
         #     calc_data = [link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None)) for link in calc_data]
 
-        if cp["is_external_filter_enabled"]:
-            efp = cp["external_filter_params"]
-            for link in calc_data:
-                # central points of the links are sent into external filter
-                link["lat_center"] = (link.site_a_latitude + link.site_b_latitude) / 2
-                link["lon_center"] = (link.site_a_longitude + link.site_b_longitude) / 2
+        # if cp["is_external_filter_enabled"]:
+        #     efp = cp["external_filter_params"]
+        #     for link in calc_data:
+        #         # central points of the links are sent into external filter
+        #         link["lat_center"] = (link.site_a_latitude + link.site_b_latitude) / 2
+        #         link["lon_center"] = (link.site_a_longitude + link.site_b_longitude) / 2
 
-                for t in range(len(link.time)):
-                    time = link.time[t].values
-                    external_wet = determine_wet(
-                        time,
-                        link.lon_center,
-                        link.lat_center,
-                        efp["radius"] + link.length / 2,
-                        efp["pixel_threshold"],
-                        efp["IMG_X_MIN"],
-                        efp["IMG_X_MAX"],
-                        efp["IMG_Y_MIN"],
-                        efp["IMG_Y_MAX"],
-                        efp["url"],
-                        efp["default_return"],
-                        not cp["is_realtime"],
-                    )
-                    internal_wet = link.wet[t].values
-                    link.wet[t] = external_wet and internal_wet
-                    logger.debug(
-                        "[%s] [EXTERNAL FILTER] CML: %d, time: %s, EXWET: %s && INTWET: %s = %s",
-                        log_run_id,
-                        link.cml_id.values,
-                        time,
-                        external_wet,
-                        internal_wet,
-                        link.wet[t].values,
-                    )
+        #         for t in range(len(link.time)):
+        #             time = link.time[t].values
+        #             external_wet = determine_wet(
+        #                 time,
+        #                 link.lon_center,
+        #                 link.lat_center,
+        #                 efp["radius"] + link.length / 2,
+        #                 efp["pixel_threshold"],
+        #                 efp["IMG_X_MIN"],
+        #                 efp["IMG_X_MAX"],
+        #                 efp["IMG_Y_MIN"],
+        #                 efp["IMG_Y_MAX"],
+        #                 efp["url"],
+        #                 efp["default_return"],
+        #                 not cp["is_realtime"],
+        #             )
+        #             internal_wet = link.wet[t].values
+        #             link.wet[t] = external_wet and internal_wet
+        #             logger.debug(
+        #                 "[%s] [EXTERNAL FILTER] CML: %d, time: %s, EXWET: %s && INTWET: %s = %s",
+        #                 log_run_id,
+        #                 link.cml_id.values,
+        #                 time,
+        #                 external_wet,
+        #                 internal_wet,
+        #                 link.wet[t].values,
+        #             )
 
         for link in calc_data:
             # calculate ratio of wet periods
@@ -171,7 +172,9 @@ def get_rain_rates(
 
             # determine signal baseline
             link["baseline"] = baseline_constant(
-                trsl=link.trsl, wet=link.wet, n_average_last_dry=cp["baseline_samples"]
+                trsl=link.trsl,
+                wet=link.wet,
+                n_average_last_dry=cp["wet_dry"]["baseline_samples"],
             )
 
             # calculate wet antenna attenuation
@@ -179,9 +182,9 @@ def get_rain_rates(
                 rsl=link.trsl,
                 baseline=link.baseline,
                 wet=link.wet,
-                waa_max=cp["waa_schleiss_val"],
-                delta_t=60 / ((60 / cp["step"]) * 60),
-                tau=cp["waa_schleiss_tau"],
+                waa_max=cp["waa"]["waa_schleiss_val"],
+                delta_t=60 / ((60 / cp["time"]["step"]) * 60),
+                tau=cp["waa"]["waa_schleiss_tau"],
             )
 
             # calculate final rain attenuation
