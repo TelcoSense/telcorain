@@ -1,21 +1,21 @@
 from telcorain.handlers.historic_writer import HistoricWriter
 from telcorain.procedures.utils.helpers import utc_datetime
 
-start = utc_datetime(year=2024, month=9, day=10)
-end = utc_datetime(year=2024, month=9, day=20)
+start = utc_datetime(year=2024, month=9, day=18, hour=18)
+end = utc_datetime(year=2024, month=9, day=19)
 
 # time_diff = (end - start).total_seconds() * 1000
 
-calculation_params = {
+cp = {
     "start": start,
     "end": end,
-    "step": 5,
+    "step": 10,
     # "time_diff": time_diff,
     "is_cnn_enabled": False,
     "is_external_filter_enabled": False,
     "external_filter_params": None,
-    "rolling_hours": 6.0,
-    "rolling_values": 120,
+    "rolling_hours": 1.0,
+    "rolling_values": 30,
     "wet_dry_deviation": 0.8,
     "baseline_samples": 5,
     "interpol_res": 0.01,
@@ -44,15 +44,13 @@ calculation_params = {
     "is_influx_write_skipped": False,
     "is_window_centered": True,
     "retention": 336,
-    "X_MIN": 16.5188567,
-    "X_MAX": 16.7054181,
-    "Y_MIN": 49.143475,
-    "Y_MAX": 49.2305394,
+    "X_MIN": 12.0905,
+    "X_MAX": 18.8591,
+    "Y_MIN": 48.5525,
+    "Y_MAX": 51.0557,
 }
 
 
-historic_writer = HistoricWriter(
-    calculation_params=calculation_params,
-)
+historic_writer = HistoricWriter(cp=cp)
 
-historic_writer.calculate_rain_grids()
+historic_writer.write_raingrids()

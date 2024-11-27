@@ -7,10 +7,10 @@ from pycomlink.processing.k_R_relation import calc_R_from_A
 from pycomlink.processing.wet_antenna import waa_schleiss_2013
 from xarray import Dataset
 
-from ...handlers.logging_handler import logger
-from ...procedures.exceptions import RaincalcException
-from ...procedures.rain import temperature_compensation, temperature_correlation
-from ...procedures.utils.external_filter import determine_wet
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.exceptions import RaincalcException
+from telcorain.procedures.rain import temperature_compensation, temperature_correlation
+from telcorain.procedures.utils.external_filter import determine_wet
 
 # import lib.pycomlink.pycomlink.processing as pycmlp
 # from lib.pycomlink.pycomlink.processing.wet_dry import cnn

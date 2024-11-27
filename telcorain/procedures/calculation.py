@@ -3,34 +3,30 @@ from typing import Union
 
 import numpy as np
 import xarray as xr
-from PyQt6.QtCore import QRunnable
 
-from ..database.influx_manager import InfluxManager
-from ..database.models.mwlink import MwLink
-from ..handlers.logging_handler import logger
-from ..procedures.data import data_loading, data_preprocessing
-from ..procedures.exceptions import (
+from telcorain.database.influx_manager import InfluxManager
+from telcorain.database.models.mwlink import MwLink
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.data import data_loading, data_preprocessing
+from telcorain.procedures.exceptions import (
     ProcessingException,
     RaincalcException,
     RainfieldsGenException,
 )
-from ..procedures.rain import rain_calculation, rainfields_generation
+from telcorain.procedures.rain import rain_calculation, rainfields_generation
 
 
-class Calculation(QRunnable):
+class Calculation:
     def __init__(
         self,
         influx_man: InfluxManager,
-        # signals: CalcSignals,
         results_id: int,
         links: dict[int, MwLink],
         selection: dict[int, int],
         cp: dict,
     ):
 
-        QRunnable.__init__(self)
         self.influx_man: InfluxManager = influx_man
-        # self.signals: CalcSignals = signals
         self.results_id: int = results_id
         self.links: dict[int, MwLink] = links
         self.selection: dict[int, int] = selection
@@ -42,6 +38,7 @@ class Calculation(QRunnable):
         self.realtime_runs: int = 0
 
         # store raingrids for possible next iteration (no need for repeated generating in realtime)
+        self.calc_data = None
         self.rain_grids: list[np.ndarray] = []
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
 
@@ -67,7 +64,6 @@ class Calculation(QRunnable):
                 selected_links=self.selection,
                 links=self.links,
                 log_run_id=log_run_id,
-                results_id=self.results_id,
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel
@@ -77,7 +73,6 @@ class Calculation(QRunnable):
                 influx_data=influx_data,
                 missing_links=missing_links,
                 log_run_id=log_run_id,
-                results_id=self.results_id,
             )
             del influx_data
         except ProcessingException:
@@ -96,7 +91,7 @@ class Calculation(QRunnable):
 
         try:
             # Generate rainfields (resample rain rates and interpolate them to a grid)
-            self.rain_grids, self.realtime_runs, self.last_time = (
+            self.rain_grids, self.realtime_runs, self.last_time, self.calc_data = (
                 rainfields_generation.generate_rainfields(
                     calc_data=calc_data,
                     cp=self.cp,

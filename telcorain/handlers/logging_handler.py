@@ -10,7 +10,7 @@ from typing import Union
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QTextEdit
 
-from . import config_handler
+from telcorain.handlers import config_handler
 
 # create logger: work with app logger only (maybe external modules can log somewhere else one day...)
 logger = logging.getLogger("telcorain")

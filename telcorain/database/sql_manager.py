@@ -8,10 +8,10 @@ import mariadb
 from mariadb import Cursor
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
-from ..handlers import config_handler
-from ..handlers.logging_handler import logger
-from ..procedures.utils.helpers import calc_distance
-from .models.mwlink import MwLink
+from telcorain.database.models.mwlink import MwLink
+from telcorain.handlers import config_handler
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.utils.helpers import calc_distance
 
 
 class SqlManager:
@@ -22,7 +22,7 @@ class SqlManager:
     # Do not spam log with error messages
     is_error_sent = False
 
-    def __init__(self, min_length: float = 0.0):
+    def __init__(self, min_length: float = 5):
         super(SqlManager, self).__init__()
         # Load settings from config file via ConfigurationManager
         self.settings = config_handler.load_sql_config()

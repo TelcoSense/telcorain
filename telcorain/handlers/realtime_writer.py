@@ -14,11 +14,11 @@ from shapely.geometry import shape
 from shapely.prepared import PreparedGeometry, prep
 from xarray import Dataset
 
-from database.influx_manager import InfluxManager
-from database.sql_manager import SqlManager
-from handlers import config_handler
-from handlers.logging_handler import logger
-from procedures.utils.helpers import dt64_to_unixtime
+from telcorain.database.influx_manager import InfluxManager
+from telcorain.database.sql_manager import SqlManager
+from telcorain.handlers import config_handler
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.utils.helpers import dt64_to_unixtime
 
 
 class RealtimeWriter:

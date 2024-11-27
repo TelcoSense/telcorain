@@ -3,7 +3,7 @@
 import configparser
 from os.path import exists
 
-from .exceptions import ConfigOptionNotFound
+from telcorain.handlers.exceptions import ConfigOptionNotFound
 
 
 class ConfigHandler:

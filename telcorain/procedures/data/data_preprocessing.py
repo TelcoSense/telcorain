@@ -6,9 +6,9 @@ from typing import Optional, Union
 import numpy as np
 import xarray as xr
 
-from ...database.models.mwlink import MwLink
-from ...handlers.logging_handler import logger
-from ...procedures.exceptions import ProcessingException
+from telcorain.database.models.mwlink import MwLink
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.exceptions import ProcessingException
 
 
 class ChannelIdentifier(Enum):

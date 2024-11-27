@@ -2,10 +2,10 @@ import traceback
 from datetime import datetime
 from typing import Union
 
-from ...database.influx_manager import InfluxManager
-from ...database.models.mwlink import MwLink
-from ...handlers.logging_handler import logger
-from ...procedures.exceptions import ProcessingException
+from telcorain.database.influx_manager import InfluxManager
+from telcorain.database.models.mwlink import MwLink
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.exceptions import ProcessingException
 
 
 def _get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:

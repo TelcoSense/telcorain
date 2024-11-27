@@ -8,7 +8,7 @@ import requests
 from PIL import Image
 from scipy.ndimage import label
 
-from ...handlers import config_handler
+from telcorain.handlers import config_handler
 
 BLACK_INDEX = [0]  # Upper text color
 RED_INDEX = [

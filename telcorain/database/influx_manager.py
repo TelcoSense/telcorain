@@ -9,9 +9,9 @@ from influxdb_client.domain.write_precision import WritePrecision
 from PyQt6.QtCore import QDateTime, QObject, QRunnable, pyqtSignal
 from urllib3.exceptions import ConnectTimeoutError, ReadTimeoutError
 
-from ..handlers import config_handler
-from ..handlers.logging_handler import logger
-from ..procedures.utils.helpers import datetime_rfc
+from telcorain.handlers import config_handler
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.utils.helpers import datetime_rfc
 
 
 class BucketType(Enum):

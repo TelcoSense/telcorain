@@ -2,7 +2,7 @@ import codecs
 import configparser
 from os.path import exists
 
-from handlers.logging_handler import logger
+from telcorain.handlers.logging_handler import logger
 
 
 class LinksetsHandler:

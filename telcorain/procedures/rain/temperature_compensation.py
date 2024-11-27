@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from ...handlers.logging_handler import logger
+from telcorain.handlers.logging_handler import logger
 
 
 def compensation(count, ips, curr_link, link, spin_correlation):

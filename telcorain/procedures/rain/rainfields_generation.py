@@ -5,8 +5,8 @@ import numpy as np
 import xarray as xr
 from pycomlink.spatial.interpolator import IdwKdtreeInterpolator
 
-from ...handlers.logging_handler import logger
-from ...procedures.exceptions import RainfieldsGenException
+from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.exceptions import RainfieldsGenException
 
 
 def generate_rainfields(
@@ -156,11 +156,11 @@ def generate_rainfields(
             for x in range(grids_to_del):
                 del rain_grids[x]
 
-            del calc_data_steps
+            # del calc_data_steps
             if calc_data_1h is not None:
                 del calc_data_1h
 
-            return rain_grids, realtime_runs, last_time
+            return rain_grids, realtime_runs, last_time, calc_data_steps
 
     except BaseException as error:
         logger.error(
