@@ -64,6 +64,9 @@ def _fill_channel_dataset(
     else:
         tsl = [*flux_data[tx_ip]["tx_power"].values()]
 
+    if current_link.tech in ["summit", "summit_bt"]:
+        rsl = [-x for x in rsl]
+
     channel = xr.Dataset(
         data_vars={
             "tsl": ("time", tsl),

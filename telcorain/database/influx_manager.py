@@ -4,14 +4,15 @@ from enum import Enum
 from threading import Thread
 from typing import Union
 
-from influxdb_client import InfluxDBClient, QueryApi, WriteApi
+from influxdb_client import InfluxDBClient, QueryApi, WriteApi, WriteOptions
 from influxdb_client.domain.write_precision import WritePrecision
 from PyQt6.QtCore import QDateTime, QObject, QRunnable, pyqtSignal
 from urllib3.exceptions import ConnectTimeoutError, ReadTimeoutError
 
-from telcorain.handlers import config_handler
+from telcorain.handlers import config_handler, config_handler_out
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import datetime_rfc
+from time import sleep
 
 
 class BucketType(Enum):
@@ -38,7 +39,10 @@ class InfluxManager:
             config_handler.config_path
         )
         self.qapi: QueryApi = self.client.query_api()
-        self.wapi: WriteApi = self.client.write_api()
+
+        self.options = WriteOptions(
+            batch_size=8, flush_interval=8, jitter_interval=0, retry_interval=1000
+        )
 
         # create influx write lock for thread safety (used only when writing output timeseries to InfluxDB)
         self.is_manager_locked = False
@@ -64,7 +68,7 @@ class InfluxManager:
         self.BUCKET_NEW_DATA: str = config_handler.read_option(
             "influx2", "bucket_new_data"
         )
-        self.BUCKET_OUT_CML: str = config_handler.read_option(
+        self.BUCKET_OUT_CML: str = config_handler_out.read_option(
             "influx2", "bucket_out_cml"
         )
         self.BUCKET_OLD_TYPE: BucketType = bucket_old_type
@@ -146,8 +150,7 @@ class InfluxManager:
         flux = (
             f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
             + f"  |> range(start: {start_str}, stop: {end_str})\n"
-            + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or'
-            f' r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon")\n'
+            + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon")\n'
             + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
             + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
             + f'  |> yield(name: "mean")'
@@ -200,43 +203,6 @@ class InfluxManager:
                             data[ip][field_name][record.get_time()] = record.get_value()
         return data
 
-    # def query_units(
-    #     self, ips: list, start: QDateTime, end: QDateTime, interval: int
-    # ) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
-    #     """
-    #     Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
-    #     Query is done for the time interval defined by 'start' and 'end' QDateTime objects, with 'interval' in seconds.
-
-    #     :param ips: list of IP addresses of CMLs to query
-    #     :param start: QDateTime object with start of the query interval
-    #     :param end: QDateTime object with end of the query interval
-    #     :param interval: time interval in minutes
-    #     :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
-    #     """
-    #     # modify boundary times to be multiples of input time interval
-    #     start.addSecs(
-    #         (
-    #             (math.ceil((start.time().minute() + 0.1) / interval) * interval)
-    #             - start.time().minute()
-    #         )
-    #         * 60
-    #     )
-    #     end.addSecs((-1 * (end.time().minute() % interval)) * 60)
-
-    #     # convert params to query substrings
-    #     start_str = start.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
-    #     end_str = end.toString("yyyy-MM-ddTHH:mm:00.000Z")  # RFC 3339
-    #     interval_str = f"{interval * 60}s"  # time in seconds
-
-    #     ips_str = f"{ips[0]}"  # IP addresses in query format
-    #     for ip in ips[1:]:
-    #         ips_str += f"|{ip}"
-
-    #     if end.toPyDateTime() < self.OLD_NEW_DATA_BORDER:
-    #         return self._raw_query_old_bucket(start_str, end_str, ips_str, interval_str)
-    #     else:
-    #         return self._raw_query_new_bucket(start_str, end_str, ips_str, interval_str)
-
     def query_units(
         self, ips: list, start: datetime, end: datetime, interval: int
     ) -> dict:
@@ -250,7 +216,6 @@ class InfluxManager:
         :param interval: time interval in minutes
         :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
         """
-
         # modify boundary times to be multiples of input time interval
         start += timedelta(
             seconds=(
@@ -288,30 +253,41 @@ class InfluxManager:
         :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
         """
         delta_map = {
-            "Past 1 h": 1 * 3600,
-            "Past 3 h": 3 * 3600,
-            "Past 6 h": 6 * 3600,
-            "Past 12 h": 12 * 3600,
-            "Past 24 h": 24 * 3600,
-            "Past 2 d": 48 * 3600,
-            "Past 7 d": 168 * 3600,
-            "Past 30 d": 720 * 3600,
+            "1h": timedelta(hours=1),
+            "3h": timedelta(hours=3),
+            "6h": timedelta(hours=6),
+            "12h": timedelta(hours=12),
+            "1d": timedelta(days=1),
+            "2d": timedelta(days=2),
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
         }
 
-        end = QDateTime.currentDateTimeUtc()
-        start = end.addSecs(-1 * delta_map.get(realtime_window_str))
+        # end = QDateTime.currentDateTimeUtc()
+        # start = end.addSecs(-1 * delta_map.get(realtime_window_str))
+
+        end = datetime.now(timezone.utc)
+        start = end - delta_map.get(realtime_window_str)
 
         return self.query_units(ips, start, end, interval)
 
     def write_points(self, points, bucket):
-        try:
-            self.wapi.write(
-                bucket=bucket, record=points, write_precision=WritePrecision.S
-            )
-        except Exception as error:
-            logger.error(
-                "Error occured during InfluxDB write query, stopping. Error: %s", error
-            )
+        with InfluxDBClient.from_config_file(
+            config_handler_out.config_path
+        ) as client_out:
+            try:
+                with client_out.write_api() as wapi_out:
+                    wapi_out.write(
+                        bucket=bucket, record=points, write_precision=WritePrecision.S
+                    )
+                    sleep(10)
+                    # TODO: do sleep dynamically?
+                    # sleep(5) # waiting for the writing process because sometimes the interpret shutdowns before query is done
+            except Exception as error:
+                logger.error(
+                    "Error occured during InfluxDB write query, stopping. Error: %s",
+                    error,
+                )
 
     def run_wipeout_output_bucket(self) -> Thread:
         thread = Thread(target=self._wipeout_output_bucket)
@@ -320,17 +296,20 @@ class InfluxManager:
 
     def _wipeout_output_bucket(self):
         attempt = 0
-        influx_timeout = int(config_handler.read_option("influx2", "timeout"))
-        max_attempts = 120 * 1000 / influx_timeout  # wait max 120 seconds
+        influx_timeout = int(config_handler_out.read_option("influx2", "timeout"))
+        max_attempts = 20 * 1000 / influx_timeout  # wait max 20 seconds
         while True:
             try:
                 attempt += 1
-                self.client.delete_api().delete(
-                    start="1970-01-01T00:00:00Z",
-                    stop="2100-01-01T00:00:00Z",
-                    predicate="",
-                    bucket=self.BUCKET_OUT_CML,
-                )
+                with InfluxDBClient.from_config_file(
+                    config_handler_out.config_path
+                ) as client_out:
+                    client_out.delete_api().delete(
+                        start="1970-01-01T00:00:00Z",
+                        stop="2100-01-01T00:00:00Z",
+                        predicate="",
+                        bucket=self.BUCKET_OUT_CML,
+                    )
                 logger.debug(
                     "[DEVMODE] InfluxDB outputs wipeout successful after %d attempts.",
                     attempt,

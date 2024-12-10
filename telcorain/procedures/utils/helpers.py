@@ -88,18 +88,19 @@ def cast_value(value):
     return value  # Default to string if no other type matches
 
 
-def create_cp_dict(path: str) -> dict:
+def create_cp_dict(path: str, format: bool = True) -> dict:
     config = configparser.ConfigParser()
     config.read(path)
-    cp = {}
+    cp = {}        
     for section in config.sections():
         cp[section] = {key: cast_value(value) for key, value in config.items(section)}
-    cp["time"]["start"] = datetime.fromisoformat(cp["time"]["start"]).replace(
-        tzinfo=timezone.utc
-    )
-    cp["time"]["end"] = datetime.fromisoformat(cp["time"]["end"]).replace(
-        tzinfo=timezone.utc
-    )
+    if format:
+        cp["time"]["start"] = datetime.fromisoformat(cp["time"]["start"]).replace(
+            tzinfo=timezone.utc
+        )
+        cp["time"]["end"] = datetime.fromisoformat(cp["time"]["end"]).replace(
+            tzinfo=timezone.utc
+        )
     return cp
 
 

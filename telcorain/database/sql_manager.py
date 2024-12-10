@@ -22,7 +22,7 @@ class SqlManager:
     # Do not spam log with error messages
     is_error_sent = False
 
-    def __init__(self, min_length: float = 5):
+    def __init__(self, min_length: float = 0.01):
         super(SqlManager, self).__init__()
         # Load settings from config file via ConfigurationManager
         self.settings = config_handler.load_sql_config()
@@ -288,6 +288,8 @@ class SqlManager:
         X_MAX: float,
         Y_MIN: float,
         Y_MAX: float,
+        address: str,
+        port: str,
     ):
         """
         Insert realtime parameters into output database.
@@ -313,8 +315,6 @@ class SqlManager:
                 x = int((X_MAX - X_MIN) / resolution + 1)
                 y = int((Y_MAX - Y_MIN) / resolution + 1)
 
-                address = config_handler.read_option("realtime", "http_server_address")
-                port = config_handler.read_option("realtime", "http_server_port")
                 if address == "0.0.0.0" or address == "":
                     address = "localhost"
                 url = f"http://{address}:{port}"
@@ -449,6 +449,40 @@ class SqlManager:
                 raise mariadb.Error("Connection is not active.")
         except mariadb.Error as e:
             logger.error("Failed to insert data into MariaDB: %s", e)
+
+    def delete_old_data(self, current_time: datetime, retention_window: datetime):
+        """
+        Delete data that are older than realtime_window
+        """
+        total_delete_rows = 0
+        try:
+            if self.check_connection():
+                cursor: Cursor = self.connection.cursor()
+                # Calculate the threshold
+                threshold = (current_time - retention_window).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                # SQL query to delete rows older than the threshold
+                query1 = f"""
+                DELETE FROM {self.settings['db_output']}.realtime_rain_grids WHERE time < %s
+                """
+                query2 = f"""
+                DELETE FROM {self.settings['db_output']}.realtime_rain_parameters WHERE started < %s
+                """
+                cursor.execute(query1, (threshold,))
+                total_delete_rows += cursor.rowcount
+                cursor.execute(query2, (threshold,))
+                total_delete_rows += cursor.rowcount
+
+                self.connection.commit()
+        except mariadb.Error as e:
+            logger.error("Failed to delete data in MariaDB: %s", e)
+        return total_delete_rows
+        # finally:
+        #     if cursor:
+        #         cursor.close()
+        #     if connection:
+        #         connection.close()
 
     def wipeout_realtime_tables(self):
         """

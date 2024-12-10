@@ -20,36 +20,32 @@ class Calculation:
     def __init__(
         self,
         influx_man: InfluxManager,
-        results_id: int,
         links: dict[int, MwLink],
         selection: dict[int, int],
         cp: dict,
+        config: dict,
     ):
 
         self.influx_man: InfluxManager = influx_man
-        self.results_id: int = results_id
         self.links: dict[int, MwLink] = links
         self.selection: dict[int, int] = selection
+        self.realtime_runs: int = 0
 
         # calculation parameters dictionary
         self.cp = cp
+        # config parameters dictionary
+        self.config = config
 
-        # run counter in case of realtime calculation
-        self.realtime_runs: int = 0
-
-        # store raingrids for possible next iteration (no need for repeated generating in realtime)
+        # store raingrids for possible next iteration (no need for repeated generating in realtime?)
         self.rain_grids: list[np.ndarray] = []
+        self.x_grid: np.ndarray = None
+        self.y_grid: np.ndarray = None
+        self.calc_data_steps = None
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
 
     def run(self):
         self.realtime_runs += 1
-        if self.cp["realtime"]["is_realtime"]:
-            log_run_id = (
-                "CALC ID: " + str(self.results_id) + ", RUN: " + str(self.realtime_runs)
-            )
-        else:
-            log_run_id = "CALC ID: " + str(self.results_id)
-
+        log_run_id = "RUN: " + str(self.realtime_runs)
         logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
 
         try:
@@ -63,6 +59,7 @@ class Calculation:
                 selected_links=self.selection,
                 links=self.links,
                 log_run_id=log_run_id,
+                realtime=self.cp["realtime"]["is_realtime"],
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel
@@ -90,20 +87,29 @@ class Calculation:
 
         try:
             # Generate rainfields (resample rain rates and interpolate them to a grid)
-            self.rain_grids, self.realtime_runs, self.last_time = (
-                rainfields_generation.generate_rainfields(
-                    calc_data=calc_data,
-                    cp=self.cp,
-                    rain_grids=self.rain_grids,
-                    realtime_runs=self.realtime_runs,
-                    last_time=self.last_time,
-                    log_run_id=log_run_id,
-                )
+            (
+                self.rain_grids,
+                self.calc_data_steps,
+                self.x_grid,
+                self.y_grid,
+                self.realtime_runs,
+                self.last_time,
+            ) = rainfields_generation.generate_rainfields(
+                calc_data=calc_data,
+                cp=self.cp,
+                rain_grids=self.rain_grids,
+                realtime_runs=self.realtime_runs,
+                last_time=self.last_time,
+                log_run_id=log_run_id,
             )
         except RainfieldsGenException:
             return
 
         logger.info("[%s] Rainfall calculation procedure ended.", log_run_id)
+
+        if self.realtime_runs == 99999:
+            self.realtime_runs = 1
+            logger.info(f"Refreshing realtime_runs to 1 after 99999 runs.")
 
 
 class CalculationHistoric:
@@ -144,6 +150,7 @@ class CalculationHistoric:
                 selected_links=self.selection,
                 links=self.links,
                 log_run_id=log_run_id,
+                realtime=False,
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel

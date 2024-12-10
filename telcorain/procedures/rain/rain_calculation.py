@@ -131,40 +131,39 @@ def get_rain_rates(
         #     # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
         #     calc_data = [link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None)) for link in calc_data]
 
-        # if cp["is_external_filter_enabled"]:
-        #     efp = cp["external_filter_params"]
-        #     for link in calc_data:
-        #         # central points of the links are sent into external filter
-        #         link["lat_center"] = (link.site_a_latitude + link.site_b_latitude) / 2
-        #         link["lon_center"] = (link.site_a_longitude + link.site_b_longitude) / 2
+        if cp["raingrids"]["is_external_filter_enabled"]:
+            for link in calc_data:
+                # central points of the links are sent into external filter
+                link["lat_center"] = (link.site_a_latitude + link.site_b_latitude) / 2
+                link["lon_center"] = (link.site_a_longitude + link.site_b_longitude) / 2
 
-        #         for t in range(len(link.time)):
-        #             time = link.time[t].values
-        #             external_wet = determine_wet(
-        #                 time,
-        #                 link.lon_center,
-        #                 link.lat_center,
-        #                 efp["radius"] + link.length / 2,
-        #                 efp["pixel_threshold"],
-        #                 efp["IMG_X_MIN"],
-        #                 efp["IMG_X_MAX"],
-        #                 efp["IMG_Y_MIN"],
-        #                 efp["IMG_Y_MAX"],
-        #                 efp["url"],
-        #                 efp["default_return"],
-        #                 not cp["is_realtime"],
-        #             )
-        #             internal_wet = link.wet[t].values
-        #             link.wet[t] = external_wet and internal_wet
-        #             logger.debug(
-        #                 "[%s] [EXTERNAL FILTER] CML: %d, time: %s, EXWET: %s && INTWET: %s = %s",
-        #                 log_run_id,
-        #                 link.cml_id.values,
-        #                 time,
-        #                 external_wet,
-        #                 internal_wet,
-        #                 link.wet[t].values,
-        #             )
+                for t in range(len(link.time)):
+                    time = link.time[t].values
+                    external_wet = determine_wet(
+                        time,
+                        link.lon_center,
+                        link.lat_center,
+                        cp["external_filter"]["radius"] + link.length / 2,
+                        cp["external_filter"]["pixel_threshold"],
+                        cp["external_filter"]["IMG_X_MIN"],
+                        cp["external_filter"]["IMG_X_MAX"],
+                        cp["external_filter"]["IMG_Y_MIN"],
+                        cp["external_filter"]["IMG_Y_MAX"],
+                        cp["external_filter"]["url"],
+                        cp["external_filter"]["default_return"],
+                        not cp["realtime"]["is_realtime"],
+                    )
+                    internal_wet = link.wet[t].values
+                    link.wet[t] = external_wet and internal_wet
+                    logger.debug(
+                        "[%s] [EXTERNAL FILTER] CML: %d, time: %s, EXWET: %s && INTWET: %s = %s",
+                        log_run_id,
+                        link.cml_id.values,
+                        time,
+                        external_wet,
+                        internal_wet,
+                        link.wet[t].values,
+                    )
 
         for link in calc_data:
             # calculate ratio of wet periods

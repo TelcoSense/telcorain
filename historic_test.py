@@ -3,16 +3,17 @@ from datetime import datetime, timedelta
 
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
-from telcorain.handlers.logging_handler import setup_init_logging
+from telcorain.handlers.logging_handler import setup_init_logging, logger
 from telcorain.handlers.writer import Writer
 from telcorain.procedures.calculation import CalculationHistoric
 from telcorain.procedures.utils.helpers import create_cp_dict, select_all_links
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
-setup_init_logging()
+setup_init_logging(logger)
 
-# load calculation params dict
-cp = create_cp_dict(path="./calculation.ini")
+# load calculation params dict and global config dict
+cp = create_cp_dict(path="./configs/config_calc.ini", format=True)
+config = create_cp_dict(path="./configs/config.ini", format=False)
 # create sql manager and filter out short links
 sql_man = SqlManager(min_length=cp["cml"]["min_length"])
 # load link definitions from MariaDB
@@ -43,6 +44,7 @@ writer = Writer(
     skip_sql=True,
     since_time=since_time,
     cp=cp,
+    config=config,
 )
 
 writer.push_results(

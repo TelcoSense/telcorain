@@ -1,6 +1,7 @@
 import traceback
 from datetime import datetime
 from typing import Union
+import numpy as np
 
 from telcorain.database.influx_manager import InfluxManager
 from telcorain.database.models.mwlink import MwLink
@@ -41,6 +42,7 @@ def load_data_from_influxdb(
     selected_links: dict[int, int],
     links: dict[int, MwLink],
     log_run_id: str = "default",
+    realtime: bool = False,
 ) -> tuple[
     dict[str, Union[dict[str, dict[datetime, float]], str]], list[int], list[str]
 ]:
@@ -51,17 +53,22 @@ def load_data_from_influxdb(
         )
 
         # Realtime calculation is being done
-        if cp["realtime"]["is_realtime"]:
+        if realtime:
             logger.info("[%s] Realtime data procedure started.", log_run_id)
             influx_data = influx_man.query_units_realtime(
-                ips, cp["realtime"]["realtime_timewindow"], cp["time"]["step"]
+                ips,
+                cp["realtime"]["realtime_timewindow"],
+                cp["time"]["step"],
             )
 
         # In other case, notify we are doing historic calculation
         else:
             logger.info("[%s] Historic data procedure started.", log_run_id)
             influx_data = influx_man.query_units(
-                ips, cp["time"]["start"], cp["time"]["end"], cp["time"]["step"]
+                ips,
+                cp["time"]["start"],
+                cp["time"]["end"],
+                cp["time"]["step"],
             )
 
         diff = len(ips) - len(influx_data)

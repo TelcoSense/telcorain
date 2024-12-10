@@ -1,10 +1,3 @@
-[directories]
-logs=./logs
-outputs=./outputs
-outputs_web=./outputs_web
-outputs_raw=./outputs_raw
-ext_filter_cache=./image_cache
-
 [time]
 step=10
 output_step=10
@@ -31,8 +24,8 @@ correlation_threshold=0.7
 [interp]
 interp_res=0.01
 idw_power=1
-idw_near=15
-idw_dist=0.1
+idw_near=30
+idw_dist=1.5
 
 [raingrids]
 min_rain_value=0.1
@@ -52,13 +45,26 @@ geojson_file=czechia.json
 map=plain_czechia.png
 
 [cml]
-min_length=5
+min_length=0.5
 
 [realtime]
-is_realtime=False
-realtime_timewindow=Past 3 h
-retention=336
-is_output_write=False
-is_history_write=False
-is_force_write=False
+is_realtime=True
+realtime_timewindow=1d
+retention=10080
+is_output_write=True
+is_history_write=True
+is_force_write=True
 is_influx_write_skipped=False
+is_sql_write_skipped=False
+
+[external_filter]
+url=http://192.168.64.166/chmi/data/CZRAD_10m
+file_prefix=FILTER_LAYER_
+radius=20
+pixel_threshold=15
+default_return=False
+max_history_lookups=3
+IMG_X_MIN=11.28
+IMG_X_MAX=20.765
+IMG_Y_MIN=48.05
+IMG_Y_MAX=52.165

@@ -1,0 +1,36 @@
+[setting]
+repetition_interval = 600
+sleep_interval = 30
+
+[logging]
+init_level=INFO
+
+[directories]
+logs=./logs
+outputs=./outputs
+outputs_web=./outputs_web
+outputs_raw=./outputs_raw
+ext_filter_cache=./image_cache
+
+[mariadb]
+address=127.0.0.1
+port=3306
+user=
+pass=
+timeout=1000
+db_metadata=cml_metadata
+db_output=telcorain_output
+
+[influx2]
+url=
+org=vut
+token=
+timeout=1000
+verify_ssl=False
+
+bucket_old_data=cbl
+old_data_type=default
+bucket_new_data=realtime_cbl
+new_data_type=default
+old_new_data_border=2023-12-31T12:00:00Z
+bucket_out_cml=output_bucket

@@ -163,7 +163,7 @@ def generate_rainfields(
             if calc_data_1h is not None:
                 del calc_data_1h
 
-            return rain_grids, realtime_runs, last_time
+            return rain_grids, calc_data_steps, x_grid, y_grid, realtime_runs, last_time
 
     except BaseException as error:
         logger.error(

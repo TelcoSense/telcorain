@@ -4,4 +4,6 @@
 /outputs_web
 /logs
 
-config.ini
+/configs/config.ini
+/configs/config_calc.ini
+/configs/config_db.ini

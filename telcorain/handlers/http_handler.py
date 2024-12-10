@@ -8,7 +8,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
-from telcorain.database.sql_manager import sql_man
+# from telcorain.database.sql_manager import sql_man
 from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
 from telcorain.handlers.writer import (
@@ -91,16 +91,32 @@ def qs_parse_coordinates(query_strings: dict[str, list[str]]) -> tuple[float, fl
     return p_latitude, p_longitude
 
 
+def handler_class(sql_man, outputs_dir, outputs_raw_dir):
+    class CustomHandler(TelcorainHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(
+                *args,
+                sql_man=sql_man,
+                outputs_dir=outputs_dir,
+                outputs_raw_dir=outputs_raw_dir,
+                **kwargs,
+            )
+
+    return CustomHandler
+
+
 class TelcorainHTTPRequestHandler(SimpleHTTPRequestHandler):
     """Custom HTTP request handler for the Telcorain application."""
 
-    outputs_dir = config_handler.read_option("directories", "outputs_web")
-    outputs_raw_dir = config_handler.read_option("directories", "outputs_raw")
+    def __init__(
+        self, *args, sql_man=None, outputs_dir=None, outputs_raw_dir=None, **kwargs
+    ):
+        self.sql_man = sql_man
+        self.outputs_dir = outputs_dir
+        self.outputs_raw_dir = outputs_raw_dir
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(
-            *args, directory=TelcorainHTTPRequestHandler.outputs_dir, **kwargs
-        )
+        super().__init__(*args, **kwargs)
+        print(f"SQL man: {self.outputs_dir}, CP: {self.outputs_raw_dir}")
 
     def __send_json_ok_response(self, response: dict[str, Any]):
         """
@@ -136,10 +152,10 @@ class TelcorainHTTPRequestHandler(SimpleHTTPRequestHandler):
                 timestamp, parameters = qs_parse_time_and_parameters(query_strings)
 
                 # verify existence of the requested data
-                if sql_man.verify_raingrid(parameters, timestamp):
+                if self.sql_man.verify_raingrid(parameters, timestamp):
                     # read the whole grid from the raw outputs directory
                     grid = read_from_ndarray_file(
-                        input_path=f"{TelcorainHTTPRequestHandler.outputs_raw_dir}/"
+                        input_path=f"{self.outputs_raw_dir}/"
                         f"{query_strings.get('timestamp', [None])[0]}.npy"
                     )
 
@@ -172,12 +188,12 @@ class TelcorainHTTPRequestHandler(SimpleHTTPRequestHandler):
                 latitude, longitude = qs_parse_coordinates(query_strings)
 
                 # verify existence of the requested data
-                if sql_man.verify_raingrid(parameters, timestamp):
+                if self.sql_man.verify_raingrid(parameters, timestamp):
                     # get the given calculation parameters from the database
-                    params = sql_man.get_realtime(parameters_id=parameters)
+                    params = self.sql_man.get_realtime(parameters_id=parameters)
                     # read the coordinates value from the raw outputs directory
                     value = read_value_from_ndarray_file(
-                        input_path=f"{TelcorainHTTPRequestHandler.outputs_raw_dir}/"
+                        input_path=f"{self.outputs_raw_dir}/"
                         f"{query_strings.get('timestamp', [None])[0]}.npy",
                         x=longitude,
                         y=latitude,
@@ -242,7 +258,7 @@ class TelcorainHTTPRequestHandler(SimpleHTTPRequestHandler):
         else:
             logger.debug(
                 'HTTP is serving file: "%s%s" to client: "%s" on port: %d.',
-                TelcorainHTTPRequestHandler.outputs_dir,
+                self.outputs_dir,
                 self.path,
                 self.client_address[0],
                 self.client_address[1],
@@ -275,60 +291,65 @@ class TelcorainHTTPRequestHandler(SimpleHTTPRequestHandler):
             super().send_error(code, message, explain)
 
 
-def setup_http_server():
+def setup_http_server(sql_man, config_db, outputs_dir, outputs_raw_dir):
     """
     Sets up and runs the HTTP server. Server has different endpoints:
     - serving image files from the web outputs directory
     - REST API endpoints utilizing functions reading data from the raw outputs directory
     Must be run in a separate thread.
     """
-    is_enabled = config_handler.read_option("realtime", "enable_http_server")
-    if is_enabled.lower() == "true":
+    is_enabled = config_db["http"]["enable_http_server"]
+    address = config_db["http"]["http_server_address"]
+    port = config_db["http"]["http_server_port"]
+
+    if str(is_enabled).lower() == "true":
         logger.info("Starting HTTP server...")
 
         try:
-            if not os.path.exists(TelcorainHTTPRequestHandler.outputs_dir):
-                os.makedirs(TelcorainHTTPRequestHandler.outputs_dir)
-                logger.info(
+            if not os.path.exists(outputs_dir):
+                os.makedirs(outputs_dir)
+                logger.debug(
                     "Created %s directory for output PNG files.",
-                    TelcorainHTTPRequestHandler.outputs_dir,
+                    outputs_dir,
                 )
 
-            if not os.path.exists(TelcorainHTTPRequestHandler.outputs_raw_dir):
-                os.makedirs(TelcorainHTTPRequestHandler.outputs_raw_dir)
-                logger.info(
+            if not os.path.exists(outputs_raw_dir):
+                os.makedirs(outputs_raw_dir)
+                logger.debug(
                     "Created %s directory for output raw files.",
-                    TelcorainHTTPRequestHandler.outputs_raw_dir,
+                    outputs_raw_dir,
                 )
 
-            address = config_handler.read_option("realtime", "http_server_address")
-            port = int(config_handler.read_option("realtime", "http_server_port"))
             if address == "0.0.0.0":
                 address_t = ""
             else:
                 address_t = address
             socket = (address_t, port)
 
-            httpd = HTTPServer(socket, TelcorainHTTPRequestHandler)
+            # httpd = HTTPServer(socket, TelcorainHTTPRequestHandler)
+            custom_handler = handler_class(sql_man, outputs_dir, outputs_raw_dir)
+            httpd = HTTPServer(socket, custom_handler)
         except Exception as error:
             logger.error("Cannot start HTTP server due to an error: %s", error)
             return
         else:
-            logger.info(f"HTTP server is running on {address}:{port}.")
-            logger.debug(
-                f"HTTP server is serving files from directory: {TelcorainHTTPRequestHandler.outputs_dir}"
-            )
-
+            logger.debug(f"HTTP server is running on {address}:{port}.")
+            logger.debug(f"HTTP server is serving files from directory: {outputs_dir}")
         # run the HTTP server
         httpd.serve_forever()
     else:
         logger.info("HTTP server is disabled.")
 
 
-def start_http_server_thread():
+def start_http_server_thread(sql_man, config, config_db):
     """Starts the HTTP server in a separate thread."""
+    outputs_dir = config["directories"]["outputs_web"]
+    outputs_raw_dir = config["directories"]["outputs_raw"]
     http_server_thread = threading.Thread(
-        target=setup_http_server, daemon=True, name="HTTPServer"
+        target=setup_http_server,
+        args=(sql_man, config_db, outputs_dir, outputs_raw_dir),
+        daemon=True,
+        name="HTTPServer",
     )
     http_server_thread.start()
     return http_server_thread
