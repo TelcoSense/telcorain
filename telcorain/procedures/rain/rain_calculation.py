@@ -16,7 +16,14 @@ from telcorain.procedures.utils.external_filter import determine_wet
 # from lib.pycomlink.pycomlink.processing.wet_dry import cnn
 # from lib.pycomlink.pycomlink.processing.wet_dry.cnn import CNN_OUTPUT_LEFT_NANS_LENGTH
 
+from telcorain.procedures.wet_dry import cnn
+from telcorain.procedures.wet_dry.cnn import (
+    CNN_OUTPUT_LEFT_NANS_LENGTH,
+)  # CNN_OUTPUT_LEFT_NANS_LENGTH = 327
+from telcorain.procedures.utils.helpers import measure_time
 
+
+@measure_time
 def get_rain_rates(
     calc_data: list[Dataset],
     cp: dict[str, Any],
@@ -105,18 +112,20 @@ def get_rain_rates(
 
         for link in calc_data:
             if cp["wet_dry"]["is_mlp_enabled"]:
-                pass
                 # determine wet periods using CNN
-                # link['wet'] = (('time',), np.zeros([link.time.size]))
+                link["wet"] = (("time",), np.zeros([link.time.size]))
 
-                # cnn_out = cnn.cnn_wet_dry(
-                #     trsl_channel_1=link.isel(channel_id=0).trsl.values,
-                #     trsl_channel_2=link.isel(channel_id=1).trsl.values,
-                #     threshold=0.82,
-                #     batch_size=128
-                # )
+                cnn_out = cnn.cnn_wet_dry(
+                    trsl_channel_1=link.isel(channel_id=0).trsl.values,
+                    trsl_channel_2=link.isel(channel_id=1).trsl.values,
+                    threshold=0.82,
+                    batch_size=128,
+                )
 
-                # link['wet'] = (('time',), np.where(np.isnan(cnn_out), link['wet'], cnn_out))
+                link["wet"] = (
+                    ("time",),
+                    np.where(np.isnan(cnn_out), link["wet"], cnn_out),
+                )
             else:
                 # determine wet periods using rolling standard deviation
                 link["wet"] = (
@@ -127,9 +136,12 @@ def get_rain_rates(
                     > cp["wet_dry"]["wet_dry_deviation"]
                 )
 
-        # if cp['is_cnn_enabled']:
-        #     # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
-        #     calc_data = [link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None)) for link in calc_data]
+        if cp["wet_dry"]["is_mlp_enabled"]:
+            # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
+            calc_data = [
+                link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None))
+                for link in calc_data
+            ]
 
         if cp["raingrids"]["is_external_filter_enabled"]:
             for link in calc_data:

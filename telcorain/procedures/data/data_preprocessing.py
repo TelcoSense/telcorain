@@ -9,6 +9,7 @@ import xarray as xr
 from telcorain.database.models.mwlink import MwLink
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.exceptions import ProcessingException
+from telcorain.procedures.utils.helpers import measure_time
 
 
 class ChannelIdentifier(Enum):
@@ -175,6 +176,7 @@ def _sort_into_channels(
         return channels
 
 
+@measure_time
 def convert_to_link_datasets(
     selected_links: dict[int, int],
     links: dict[int, MwLink],

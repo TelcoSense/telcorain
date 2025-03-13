@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 
 from telcorain.handlers.logging_handler import logger
+from telcorain.procedures.utils.helpers import measure_time
 
 
+@measure_time
 def pearson_correlation(count, ips, curr_link, link_todelete, link, spin_correlation):
 
     # spin_correlation is the set value of the correlation from which the compensation algorithm is performed

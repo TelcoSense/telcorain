@@ -7,8 +7,10 @@ from pycomlink.spatial.interpolator import IdwKdtreeInterpolator
 
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.exceptions import RainfieldsGenException
+from telcorain.procedures.utils.helpers import measure_time
 
 
+@measure_time
 def generate_rainfields(
     calc_data: list[xr.Dataset],
     cp: dict[str, Any],
@@ -181,6 +183,7 @@ def generate_rainfields(
         )
 
 
+@measure_time
 def generate_rainfields_historic(
     calc_data: list[xr.Dataset],
     cp: dict[str, Any],

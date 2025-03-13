@@ -1,4 +1,5 @@
 import traceback
+from os.path import exists
 from datetime import datetime
 from typing import Union
 import numpy as np
@@ -7,8 +8,10 @@ from telcorain.database.influx_manager import InfluxManager
 from telcorain.database.models.mwlink import MwLink
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.exceptions import ProcessingException
+from telcorain.procedures.utils.helpers import measure_time
 
 
+@measure_time
 def _get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:
     if len(selected_links) < 1:
         raise ValueError("Empty selection array.")
@@ -36,6 +39,7 @@ def _get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:
     return ips
 
 
+@measure_time
 def load_data_from_influxdb(
     influx_man: InfluxManager,
     cp: dict,
@@ -43,6 +47,7 @@ def load_data_from_influxdb(
     links: dict[int, MwLink],
     log_run_id: str = "default",
     realtime: bool = False,
+    force_data_refresh: bool = False,
 ) -> tuple[
     dict[str, Union[dict[str, dict[datetime, float]], str]], list[int], list[str]
 ]:
@@ -59,6 +64,8 @@ def load_data_from_influxdb(
                 ips,
                 cp["realtime"]["realtime_timewindow"],
                 cp["time"]["step"],
+                cp["realtime"]["realtime_optimization"],
+                force_data_refresh,
             )
 
         # In other case, notify we are doing historic calculation

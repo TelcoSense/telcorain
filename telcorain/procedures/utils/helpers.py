@@ -1,10 +1,11 @@
 import configparser
 from datetime import datetime, timezone
 from math import atan2, cos, radians, sin, sqrt
-
+from functools import wraps
 import numpy as np
 
 from telcorain.database.models.mwlink import MwLink
+from telcorain.handlers.logging_handler import logger
 
 
 def calc_distance(lat_A: float, long_A: float, lat_B: float, long_B: float) -> float:
@@ -91,7 +92,7 @@ def cast_value(value):
 def create_cp_dict(path: str, format: bool = True) -> dict:
     config = configparser.ConfigParser()
     config.read(path)
-    cp = {}        
+    cp = {}
     for section in config.sections():
         cp[section] = {key: cast_value(value) for key, value in config.items(section)}
     if format:
@@ -116,3 +117,16 @@ def select_links(link_ids: list[int]) -> dict[int, int]:
     for link_id in link_ids:
         selected_links[link_id] = 3
     return selected_links
+
+
+def measure_time(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = datetime.now(tz=timezone.utc)
+        result = func(*args, **kwargs)
+        logger.debug(
+            f"Function '{func.__name__}' executed in {datetime.now(tz=timezone.utc) - start_time}"
+        )
+        return result
+
+    return wrapper

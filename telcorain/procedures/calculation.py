@@ -1,6 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Union
+from os.path import exists
 
+import pickle
 import numpy as np
 import xarray as xr
 
@@ -14,6 +16,7 @@ from telcorain.procedures.exceptions import (
     RainfieldsGenException,
 )
 from telcorain.procedures.rain import rain_calculation, rainfields_generation
+from telcorain.procedures.utils.helpers import measure_time
 
 
 class Calculation:
@@ -30,6 +33,8 @@ class Calculation:
         self.links: dict[int, MwLink] = links
         self.selection: dict[int, int] = selection
         self.realtime_runs: int = 0
+        self.thousands_runs: int = 0
+        self.force_data_refresh: bool = False
 
         # calculation parameters dictionary
         self.cp = cp
@@ -43,6 +48,7 @@ class Calculation:
         self.calc_data_steps = None
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
 
+    @measure_time
     def run(self):
         self.realtime_runs += 1
         log_run_id = "RUN: " + str(self.realtime_runs)
@@ -53,6 +59,7 @@ class Calculation:
             influx_data: dict[str, Union[dict[str, dict[datetime, float]], str]]
             missing_links: list[int]
             ips: list[str]
+
             influx_data, missing_links, ips = data_loading.load_data_from_influxdb(
                 influx_man=self.influx_man,
                 cp=self.cp,
@@ -60,6 +67,7 @@ class Calculation:
                 links=self.links,
                 log_run_id=log_run_id,
                 realtime=self.cp["realtime"]["is_realtime"],
+                force_data_refresh=self.force_data_refresh,
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel
@@ -70,7 +78,13 @@ class Calculation:
                 missing_links=missing_links,
                 log_run_id=log_run_id,
             )
+
+            # je to safe? neni lepsi drzet influx data v ramce? asi zalezi na nastaveni...
+            if self.cp["realtime"]["realtime_optimization"]:
+                with open("temp_data/temp_data.pkl", "wb") as f:
+                    pickle.dump(influx_data, f)
             del influx_data
+
         except ProcessingException:
             return
 
@@ -107,9 +121,19 @@ class Calculation:
 
         logger.info("[%s] Rainfall calculation procedure ended.", log_run_id)
 
+        # once per 1000 runs, update the whole influx_data entry so it does load all currently available CMLs again
+        if self.realtime_runs % 1000 == 0:
+            self.force_data_refresh = True
+        else:
+            self.force_data_refresh = False
+
+        # we do not want realtime_runs to overflow
         if self.realtime_runs == 99999:
             self.realtime_runs = 1
-            logger.info(f"Refreshing realtime_runs to 1 after 99999 runs.")
+            self.thousands_runs += 1
+            logger.info(
+                f"Refreshing realtime_runs to 1 after 99999 runs. No. of thousand runs: {self.thousands_runs}"
+            )
 
 
 class CalculationHistoric:
@@ -135,6 +159,7 @@ class CalculationHistoric:
         self.y_grid: np.ndarray = None
         self.calc_data_steps = None
 
+    @measure_time
     def run(self):
         log_run_id = "CALC ID: " + str(self.results_id)
         logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
