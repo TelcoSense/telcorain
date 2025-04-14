@@ -478,11 +478,6 @@ class SqlManager:
         except mariadb.Error as e:
             logger.error("Failed to delete data in MariaDB: %s", e)
         return total_delete_rows
-        # finally:
-        #     if cursor:
-        #         cursor.close()
-        #     if connection:
-        #         connection.close()
 
     def wipeout_realtime_tables(self):
         """

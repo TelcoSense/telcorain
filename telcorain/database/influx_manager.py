@@ -20,7 +20,7 @@ from telcorain.procedures.utils.helpers import measure_time
 
 @measure_time
 def get_max_min_time(
-    data: dict[str, Union[dict[str, dict[datetime, float]], str]]
+    data: dict[str, Union[dict[str, dict[datetime, float]], str]],
 ) -> tuple[Optional[datetime], Optional[datetime]]:
     """
     Gets the maximum and minimum time values from the data.
@@ -342,26 +342,43 @@ class InfluxManager:
     ) -> dict:
         # TODO: needs to be refactored to use the same query for both old and new buckets using BucketType enum
         # construct flux query
-        slux = (
-            f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
-            + f"  |> range(start: {start_str}, stop: {end_str})\n"
-            + f'  |> filter(fn: (r) => r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
-            + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
-            + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
-            + f'  |> yield(name: "mean")'
-        )
+        # slux = (
+        #     f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+        #     + f"  |> range(start: {start_str}, stop: {end_str})\n"
+        #     + f'  |> filter(fn: (r) => r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
+        #     + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
+        #     + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+        #     + f'  |> yield(name: "mean")'
+        # )
+
+        # flux = (
+        #     f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+        #     + f"  |> range(start: {start_str}, stop: {end_str})\n"
+        #     + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon")\n'
+        #     + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
+        #     + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+        #     + f'  |> yield(name: "mean")'
+        # )
+
+        # # query influxDB
+        # results_slux = self.qapi.query(slux)
+        # results_flux = self.qapi.query(flux)
+
+        # print("SLUX")
+        # print(results_slux)
+        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+        # print("FLUX")
+        # print(results_flux)
 
         flux = (
             f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
             + f"  |> range(start: {start_str}, stop: {end_str})\n"
-            + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon")\n'
+            + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
             + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
             + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
             + f'  |> yield(name: "mean")'
         )
 
-        # query influxDB
-        results_slux = self.qapi.query(slux)
         results_flux = self.qapi.query(flux)
 
         data = {}
@@ -374,37 +391,33 @@ class InfluxManager:
             "Vysilany_Vykon": "tx_power",
             "Signal": "rx_power",
         }
-        for results in (results_slux, results_flux):
-            for table in results:
-                ip = table.records[0].values.get("agent_host")
+        # for results in (results_slux, results_flux):
+        # for results in results_flux:
+        # for table in results:
+        for table in results_flux:
+            ip = table.records[0].values.get("agent_host")
 
-                # initialize new IP record in the result dictionary
-                if ip not in data:
-                    data[ip] = {}
-                    data[ip]["unit"] = table.records[0].get_measurement()
+            # initialize new IP record in the result dictionary
+            if ip not in data:
+                data[ip] = {}
+                data[ip]["unit"] = table.records[0].get_measurement()
 
-                # collect data from the current table
-                for record in table.records:
-                    if ip in data:
-                        field_name = rename_map.get(
-                            record.get_field(), record.get_field()
-                        )
-                        if field_name not in data[ip]:
-                            data[ip][field_name] = {}
+            # collect data from the current table
+            for record in table.records:
+                if ip in data:
+                    field_name = rename_map.get(record.get_field(), record.get_field())
+                    if field_name not in data[ip]:
+                        data[ip][field_name] = {}
 
-                        # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
-                        if (field_name == "tx_power") and (record.get_value() is None):
-                            data[ip]["tx_power"][record.get_time()] = 0.0
-                        elif (field_name == "temperature") and (
-                            record.get_value() is None
-                        ):
-                            data[ip]["temperature"][record.get_time()] = 0.0
-                        elif (field_name == "rx_power") and (
-                            record.get_value() is None
-                        ):
-                            data[ip]["rx_power"][record.get_time()] = 0.0
-                        else:
-                            data[ip][field_name][record.get_time()] = record.get_value()
+                    # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
+                    if (field_name == "tx_power") and (record.get_value() is None):
+                        data[ip]["tx_power"][record.get_time()] = 0.0
+                    elif (field_name == "temperature") and (record.get_value() is None):
+                        data[ip]["temperature"][record.get_time()] = 0.0
+                    elif (field_name == "rx_power") and (record.get_value() is None):
+                        data[ip]["rx_power"][record.get_time()] = 0.0
+                    else:
+                        data[ip][field_name][record.get_time()] = record.get_value()
         return data
 
     @measure_time

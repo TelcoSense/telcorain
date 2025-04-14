@@ -96,7 +96,6 @@ class RealtimeWriter:
 
         for t in range(len(calc_dataset.time)):
             time = calc_dataset.time[t]
-            # if (time.values > np_last_time) and (self.write_historic or (time.values > np_since_time)):
             raingrid_time: datetime = datetime.utcfromtimestamp(
                 dt64_to_unixtime(time.values)
             )
@@ -104,7 +103,7 @@ class RealtimeWriter:
             file_name: str = raingrid_time.strftime("%Y-%m-%d_%H%M")
 
             if not os.path.exists(f"{self.outputs_raw_dir}/{file_name}.npy"):
-                logger.info(
+                logger.debug(
                     "[WRITE] Saving raingrid %s for web output...", formatted_time
                 )
                 raingrid_links = calc_dataset.isel(time=t).cml_id.values.tolist()
@@ -149,7 +148,7 @@ class RealtimeWriter:
 
                 logger.debug("[WRITE] Raingrid %s successfully saved.", formatted_time)
 
-        logger.info("[WRITE] Saving raingrids - DONE.")
+        logger.info("[WRITE] Saving raingrids -- DONE.")
 
     def _write_timeseries(
         self,
@@ -169,7 +168,7 @@ class RealtimeWriter:
 
         points_to_write = []
 
-        logger.info(
+        logger.debug(
             "[WRITE: InfluxDB] Preparing rain timeseries from individual CMLs for writing into InfluxDB..."
         )
 
@@ -206,12 +205,12 @@ class RealtimeWriter:
             logger.debug(
                 "[WRITE: InfluxDB] Wipe thread is done. Proceeding with timeseries writing..."
             )
-        logger.info(
+        logger.debug(
             "[WRITE: InfluxDB] Writing rain timeseries from individual CMLs into database..."
         )
         self.influx_man.write_points(points_to_write, self.influx_man.BUCKET_OUT_CML)
-        logger.info(
-            "[WRITE: InfluxDB] Writing rain timeseries from individual CMLs - DONE."
+        logger.debug(
+            "[WRITE: InfluxDB] Writing rain timeseries from individual CMLs -- DONE."
         )
 
     def push_results(

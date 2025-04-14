@@ -2,6 +2,7 @@
 /image_cache
 /outputs_raw
 /outputs_web
+/outputs_center
 /logs
 
 /configs/config.ini
