@@ -49,7 +49,7 @@ class Calculation:
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
 
     @measure_time
-    def run(self):
+    def run(self, realtime_timewindow: str = "1d"):
         self.realtime_runs += 1
         log_run_id = "RUN: " + str(self.realtime_runs)
         logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
@@ -67,6 +67,7 @@ class Calculation:
                 links=self.links,
                 log_run_id=log_run_id,
                 realtime=self.cp["realtime"]["is_realtime"],
+                realtime_timewindow=realtime_timewindow,
                 force_data_refresh=self.force_data_refresh,
             )
 

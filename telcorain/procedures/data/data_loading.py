@@ -47,6 +47,7 @@ def load_data_from_influxdb(
     links: dict[int, MwLink],
     log_run_id: str = "default",
     realtime: bool = False,
+    realtime_timewindow: str = "1d",
     force_data_refresh: bool = False,
 ) -> tuple[
     dict[str, Union[dict[str, dict[datetime, float]], str]], list[int], list[str]
@@ -62,7 +63,7 @@ def load_data_from_influxdb(
             logger.info("[%s] Realtime data procedure started.", log_run_id)
             influx_data = influx_man.query_units_realtime(
                 ips,
-                cp["realtime"]["realtime_timewindow"],
+                realtime_timewindow,
                 cp["time"]["step"],
                 cp["realtime"]["realtime_optimization"],
                 force_data_refresh,

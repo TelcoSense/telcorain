@@ -253,13 +253,13 @@ class RealtimeWriter:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.outputs_raw_dir, exist_ok=True)
 
-        # I. RAINGRIDS INTO MARIADB
-        self._write_raingrids(
-            rain_grids,
-            x_grid,
-            y_grid,
-            calc_dataset,
-        )
+        # # I. RAINGRIDS INTO MARIADB
+        # self._write_raingrids(
+        #     rain_grids,
+        #     x_grid,
+        #     y_grid,
+        #     calc_dataset,
+        # )
         del rain_grids
 
         # II. INDIVIDUAL CML TIMESERIES INTO INFLUXDB
