@@ -107,9 +107,6 @@ def filter_and_prepend(
                     }
                     if filtered_time_value_dict:
                         filtered_nested_dict[nested_key] = filtered_time_value_dict
-                    # print(
-                    #     f"Key: {key}, Nested Key: {nested_key}, Filtered Size: {len(filtered_time_value_dict)}"
-                    # )
             updated_data[key] = filtered_nested_dict
         else:
             updated_data[key] = data[key]  # Preserve non-dict values
@@ -140,81 +137,6 @@ def filter_and_prepend(
     )
     print(f"Len of new_data: {len(data)}")
     print(f"Final size of updated data: {final_size}")
-    return updated_data
-
-
-@measure_time
-def filter_and_prepend2(
-    data: dict[str, Union[dict[str, dict[datetime, float]], str]],
-    new_data: dict[str, dict[datetime, float]],
-    first_entry_time: datetime,
-    handle_missing: str = "filter",  # options: "filter" or "append"
-) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
-    """
-    Update old_influx_data with new_influx_data, handling missing keys (measurements) based on the specified strategy.
-    This is needed for mergind old and new influx data if the dimensions are not consistent.
-
-    :param data: old data from the previous run
-    :param new_data: new data within this run
-    :param first_entry_time: time of the end of old data (first entry of new data)
-    :param handle_missing: strategy for missing keys. "filter" to discard, "append" to preserve data
-    :return: updated dataset with filtered and merged data
-    """
-    updated_data = {}
-
-    # filter old data based on retention window given by first_entry_time
-    for key, value in data.items():
-        if isinstance(value, dict):
-            filtered_nested_dict = {}
-            for nested_key, time_value_dict in value.items():
-                if isinstance(time_value_dict, dict):
-                    # keep only entries within the retention window
-                    filtered_nested_dict[nested_key] = {
-                        time: val
-                        for time, val in time_value_dict.items()
-                        if time > first_entry_time
-                    }
-            updated_data[key] = filtered_nested_dict
-        else:
-            updated_data[key] = value  # keep non-dictionary values (e.g., metadata)
-
-    # handle keys missing from new_data
-    old_keys = set(data.keys())
-    new_keys = set(new_data.keys())
-
-    if handle_missing == "filter":
-        # remove keys from old_data that are missing in new_data
-        updated_data = {
-            key: updated_data[key] for key in updated_data if key in new_keys
-        }
-    elif handle_missing == "append":
-        # preserve old_data keys that are missing in new_data
-        missing_keys = old_keys - new_keys
-        for key in missing_keys:
-            updated_data[key] = data[key]
-
-    # merge new data into updated_data
-    for key, time_value_dict in new_data.items():
-        if key not in updated_data:
-            # add entirely new keys
-            updated_data[key] = {"default": time_value_dict}
-        elif isinstance(updated_data[key], dict):
-            for nested_key, new_time_value_dict in time_value_dict.items():
-                if nested_key not in updated_data[key]:
-                    # add new nested keys
-                    updated_data[key][nested_key] = new_time_value_dict
-                else:
-                    # update existing nested keys with newer timestamps
-                    most_recent_time = max(
-                        updated_data[key][nested_key].keys(), default=first_entry_time
-                    )
-                    updated_data[key][nested_key].update(
-                        {
-                            time: val
-                            for time, val in new_time_value_dict.items()
-                            if time > most_recent_time
-                        }
-                    )
     return updated_data
 
 
@@ -336,40 +258,13 @@ class InfluxManager:
 
         return data
 
+    def is_aligned_10_min(self, ts: datetime) -> bool:
+        return ts.minute % 10 == 0 and ts.second == 0 and ts.microsecond == 0
+
     @measure_time
     def _raw_query_new_bucket(
         self, start_str: str, end_str: str, ips_str: str, interval_str: str
     ) -> dict:
-        # TODO: needs to be refactored to use the same query for both old and new buckets using BucketType enum
-        # construct flux query
-        # slux = (
-        #     f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
-        #     + f"  |> range(start: {start_str}, stop: {end_str})\n"
-        #     + f'  |> filter(fn: (r) => r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
-        #     + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
-        #     + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
-        #     + f'  |> yield(name: "mean")'
-        # )
-
-        # flux = (
-        #     f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
-        #     + f"  |> range(start: {start_str}, stop: {end_str})\n"
-        #     + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon")\n'
-        #     + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
-        #     + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
-        #     + f'  |> yield(name: "mean")'
-        # )
-
-        # # query influxDB
-        # results_slux = self.qapi.query(slux)
-        # results_flux = self.qapi.query(flux)
-
-        # print("SLUX")
-        # print(results_slux)
-        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
-        # print("FLUX")
-        # print(results_flux)
-
         flux = (
             f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
             + f"  |> range(start: {start_str}, stop: {end_str})\n"
@@ -391,9 +286,6 @@ class InfluxManager:
             "Vysilany_Vykon": "tx_power",
             "Signal": "rx_power",
         }
-        # for results in (results_slux, results_flux):
-        # for results in results_flux:
-        # for table in results:
         for table in results_flux:
             ip = table.records[0].values.get("agent_host")
 
@@ -404,21 +296,34 @@ class InfluxManager:
 
             # collect data from the current table
             for record in table.records:
+                timestamp = record.get_time()
+
+                # skip timestamps not aligned to 10-minute boundaries
+                if not self.is_aligned_10_min(timestamp):
+                    # logger.debug(
+                    #     "Skipping unaligned timestamp: %s", timestamp.isoformat()
+                    # )
+                    continue
+
                 if ip in data:
                     field_name = rename_map.get(record.get_field(), record.get_field())
                     if field_name not in data[ip]:
                         data[ip][field_name] = {}
 
-                    # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
-                    if (field_name == "tx_power") and (record.get_value() is None):
-                        data[ip]["tx_power"][record.get_time()] = 0.0
-                    elif (field_name == "temperature") and (record.get_value() is None):
-                        data[ip]["temperature"][record.get_time()] = 0.0
-                    elif (field_name == "rx_power") and (record.get_value() is None):
-                        data[ip]["rx_power"][record.get_time()] = 0.0
-                    else:
-                        data[ip][field_name][record.get_time()] = record.get_value()
-        return data
+                # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
+                value = record.get_value()
+                time = record.get_time()
+
+                # If value is None and field is one of the special cases, set to 0.0
+                if value is None and field_name in {
+                    "tx_power",
+                    "temperature",
+                    "rx_power",
+                }:
+                    data[ip][field_name][time] = 0.0
+                else:
+                    data[ip][field_name][time] = value
+                return data
 
     @measure_time
     def query_units(
@@ -498,16 +403,6 @@ class InfluxManager:
                         len_of_new_data,
                     )
 
-                # # Check difference between old_influx_data and new_influx_data
-                # old_keys = set(old_influx_data.keys())
-                # new_keys = set(new_influx_data.keys())
-
-                # # Compare top-level keys
-                # missing_in_new = old_keys - new_keys
-                # missing_in_old = new_keys - old_keys
-
-                # print(f"Keys in old_data but not in new_data: {missing_in_new}")
-                # print(f"Keys in new_data but not in old_data: {missing_in_old}")
                 updated_data = filter_and_prepend(
                     old_influx_data, new_influx_data, orig_start
                 )
