@@ -382,7 +382,7 @@ class Writer:
                 formatted_time: str = raingrid_time.strftime("%Y-%m-%d %H:%M")
                 file_name: str = raingrid_time.strftime("%Y-%m-%d_%H%M")
 
-                logger.info(
+                logger.debug(
                     "[WRITE] Saving raingrid %s for web output...", formatted_time
                 )
                 raingrid_links = calc_dataset.isel(time=t).cml_id.values.tolist()
@@ -428,7 +428,7 @@ class Writer:
 
                 logger.debug("[WRITE] Raingrid %s successfully saved.", formatted_time)
 
-        logger.info("[WRITE] Saving raingrids - DONE.")
+        logger.info("[WRITE] Saving raingrids -- DONE.")
 
     def _write_timeseries(
         self,
@@ -491,7 +491,7 @@ class Writer:
         )
         self.influx_man.write_points(points_to_write, self.influx_man.BUCKET_OUT_CML)
         logger.info(
-            "[WRITE: InfluxDB] Writing rain timeseries from individual CMLs - DONE."
+            "[WRITE: InfluxDB] Writing rain timeseries from individual CMLs -- DONE."
         )
 
     def push_results(
@@ -506,7 +506,7 @@ class Writer:
         :param rain_grids: list of 2D numpy arrays with rain intensity values
         :param x_grid: 2D numpy array of x coordinates
         :param y_grid: 2D numpy array of y coordinates
-        :param calc_dataset: xarray Dataset with calculation data
+        :param calc_dataset: xarray Dataset with calculatt`ion data
         """
         # lock the influx manager to prevent start of new calculation before writing is finished
         # (lock is checked by the calculation starting mechanism, if the lock is active, calculation cannot start)
@@ -519,6 +519,14 @@ class Writer:
                 len(calc_dataset.time),
             )
             return
+
+        if self.config["setting"]["compensate_historic"]:
+            desired_start = self.cp["time"]["start"]
+            # filter calc_dataset by time
+            calc_dataset = calc_dataset.sel(time=slice(desired_start, None))
+            # slice rain_grids to match the new dataset (assuming 1-to-1 time/sample mapping)
+            time_len = calc_dataset.sizes["time"]
+            rain_grids = rain_grids[-time_len:]
 
         if not self.skip_sql:
             last_record = self.sql_man.get_last_raingrid()

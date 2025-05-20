@@ -13,6 +13,8 @@ from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import calc_distance
 
+from typing import Optional
+
 
 class SqlManager:
     """
@@ -22,7 +24,7 @@ class SqlManager:
     # Do not spam log with error messages
     is_error_sent = False
 
-    def __init__(self, min_length: float = 0.01):
+    def __init__(self):
         super(SqlManager, self).__init__()
         # Load settings from config file via ConfigurationManager
         self.settings = config_handler.load_sql_config()
@@ -33,8 +35,6 @@ class SqlManager:
 
         # current realtime params DB ID
         self.realtime_params_id = 0
-        # filter out short links
-        self.min_length = min_length
 
     def connect(self):
         """
@@ -76,10 +76,15 @@ class SqlManager:
             self.connect()
             return self.is_connected
 
-    def load_metadata(self) -> dict[int, MwLink]:
+    def load_metadata(
+        self, ids=None, min_length: int = 0.01, max_length: float = float("inf")
+    ) -> dict[int, MwLink]:
         """
         Load metadata of CMLs from MariaDB.
 
+        :param ids: Optional list of link IDs to load.
+        :param min_length: Minimum allowed link length (in km).
+        :param max_length: Maximum allowed link length (in km).
         :return: Dictionary of CMLs metadata. Key is CML ID, value is MwLink model object.
         """
         try:
@@ -111,10 +116,19 @@ class SqlManager:
                 JOIN sites AS sites_A ON links.site_A = sites_A.ID
                 JOIN sites AS sites_B ON links.site_B = sites_B.ID
                 JOIN technologies ON links.technology = technologies.ID
-                JOIN technologies_influx_mapping ON technologies.influx_mapping_ID = technologies_influx_mapping.ID;
+                JOIN technologies_influx_mapping ON technologies.influx_mapping_ID = technologies_influx_mapping.ID
                 """
 
-                cursor.execute(query)
+                # filtering based on IDs of the links if provided
+                if ids is not None and len(ids) > 0:
+                    placeholder = ", ".join(["%s"] * len(ids))
+                    query += f" WHERE links.ID IN ({placeholder})"
+                query += ";"
+
+                if ids is not None and len(ids) > 0:
+                    cursor.execute(query, ids)
+                else:
+                    cursor.execute(query)
 
                 links = {}
 
@@ -143,8 +157,8 @@ class SqlManager:
                         latitude_A, longitude_A, latitude_B, longitude_B
                     )
 
-                    if link_length < self.min_length:
-                        continue  # TODO temporarily skip links shorter than 300 meters
+                    if link_length < min_length or link_length > max_length:
+                        continue
 
                     link = MwLink(
                         link_id=ID,

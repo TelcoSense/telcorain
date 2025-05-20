@@ -6,6 +6,7 @@ from threading import Thread
 from typing import Union, Optional
 from os.path import exists
 import pickle
+import re
 
 from influxdb_client import InfluxDBClient, QueryApi, WriteApi, WriteOptions
 from influxdb_client.domain.write_precision import WritePrecision
@@ -16,128 +17,6 @@ from telcorain.handlers import config_handler, config_handler_out
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import datetime_rfc
 from telcorain.procedures.utils.helpers import measure_time
-
-
-@measure_time
-def get_max_min_time(
-    data: dict[str, Union[dict[str, dict[datetime, float]], str]],
-) -> tuple[Optional[datetime], Optional[datetime]]:
-    """
-    Gets the maximum and minimum time values from the data.
-
-    :param data: The input data structure with timestamps as datetime objects.
-    :return: A tuple containing the max and min time values as datetime objects, or (None, None) if no valid timestamps are found.
-    """
-    all_times = []
-
-    # Traverse the data structure to collect timestamps
-    for key, value in data.items():
-        if isinstance(value, dict):  # Only process nested dictionaries
-            for nested_key, time_value_dict in value.items():
-                if isinstance(time_value_dict, dict):
-                    # Collect all datetime keys
-                    all_times.extend(time_value_dict.keys())
-
-    # Check if any timestamps were found
-    if not all_times:
-        return None, None
-
-    # Get min and max times directly as datetime objects
-    min_time = min(all_times)
-    max_time = max(all_times)
-
-    return min_time, max_time
-
-
-def count_entries(data: dict[str, Union[dict, str]]) -> int:
-    """
-    Recursively counts the number of entries in a nested dictionary.
-
-    :param data: the dictionary (influx_data) to count entries for.
-    :return: the total number of entries.
-    """
-    count = 0
-    for value in data.values():
-        if isinstance(value, dict):
-            # recursively count nested dictionaries
-            count += count_entries(value)
-        elif isinstance(value, str):
-            # strings are metadata, count as one
-            count += 1
-    return count
-
-
-@measure_time
-def filter_and_prepend(
-    data: dict[str, Union[dict[str, dict[datetime, float]], str]],
-    new_data: dict[str, dict[datetime, float]],
-    first_entry_time: datetime,
-) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
-    """
-    Update old data with new data while ensuring the keys of both datasets remain the same.
-
-    :param data: Old dataset from the previous run.
-    :param new_data: New dataset fetched in the current run.
-    :param current_time: The current timestamp.
-    :param retention_window: The time window for filtering old data.
-    :return: Updated dataset with filtered and merged data.
-    """
-    updated_data = {}
-
-    # Step 1: Find common keys
-    old_keys = set(data.keys())
-    new_keys = set(new_data.keys())
-    common_keys = old_keys & new_keys  # Intersection of old and new keys
-
-    # print(f"Keys common to both: {common_keys}")
-    print(f"Keys only in old_data (will be removed): {old_keys - common_keys}")
-    print(f"Keys only in new_data (will be removed): {new_keys - common_keys}")
-
-    # Step 2: Filter old_data to retain common keys and filter timestamps
-    for key in common_keys:
-        if isinstance(data[key], dict):
-            filtered_nested_dict = {}
-            for nested_key, time_value_dict in data[key].items():
-                if isinstance(time_value_dict, dict):
-                    # Filter out old timestamps
-                    filtered_time_value_dict = {
-                        time: val
-                        for time, val in time_value_dict.items()
-                        if time > first_entry_time
-                    }
-                    if filtered_time_value_dict:
-                        filtered_nested_dict[nested_key] = filtered_time_value_dict
-            updated_data[key] = filtered_nested_dict
-        else:
-            updated_data[key] = data[key]  # Preserve non-dict values
-
-    # Step 3: Merge new_data into updated_data for common keys
-    for key in common_keys:
-        for nested_key, new_time_value_dict in new_data[key].items():
-            if nested_key not in updated_data[key]:
-                updated_data[key][nested_key] = new_time_value_dict
-            else:
-                # Avoid duplicating timestamps
-                existing_times = set(updated_data[key][nested_key].keys())
-                new_entries = {
-                    time: val
-                    for time, val in new_time_value_dict.items()
-                    if time not in existing_times
-                }
-                updated_data[key][nested_key].update(new_entries)
-                # print(
-                #     f"Key: {key}, Nested Key: {nested_key}, New Entries Added: {len(new_entries)}"
-                # )
-
-    # Debug final size
-    final_size = sum(
-        sum(len(time_dict) for time_dict in value.values())
-        for key, value in updated_data.items()
-        if isinstance(value, dict)
-    )
-    print(f"Len of new_data: {len(data)}")
-    print(f"Final size of updated data: {final_size}")
-    return updated_data
 
 
 class BucketType(Enum):
@@ -263,22 +142,31 @@ class InfluxManager:
 
     @measure_time
     def _raw_query_new_bucket(
-        self, start_str: str, end_str: str, ips_str: str, interval_str: str
+        self,
+        start_str: str,
+        end_str: str,
+        ip_list: list,
+        interval_str: str,
+        chunk_size: int = 1500,
     ) -> dict:
-        flux = (
-            f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
-            + f"  |> range(start: {start_str}, stop: {end_str})\n"
-            + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
-            + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
-            + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
-            + f'  |> yield(name: "mean")'
-        )
+        """
+        Queries InfluxDB in chunks of IPs to avoid overly large regex filters.
+        """
+        all_data = {}
 
-        results_flux = self.qapi.query(flux)
+        # helper to build the Flux query for a given IP chunk
+        def build_flux_query(ips_regex: str) -> str:
+            return (
+                f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+                f"  |> range(start: {start_str}, stop: {end_str})\n"
+                f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" '
+                f'or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
+                f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_regex}/)\n'
+                f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+                f'  |> yield(name: "mean")'
+            )
 
-        data = {}
-
-        # map raw fields to the result dictionary
+        # Rename map for fields
         rename_map = {
             "Teplota": "temperature",
             "PrijimanaUroven": "rx_power",
@@ -286,44 +174,48 @@ class InfluxManager:
             "Vysilany_Vykon": "tx_power",
             "Signal": "rx_power",
         }
-        for table in results_flux:
-            ip = table.records[0].values.get("agent_host")
 
-            # initialize new IP record in the result dictionary
-            if ip not in data:
-                data[ip] = {}
-                data[ip]["unit"] = table.records[0].get_measurement()
+        # process IPs in chunks
+        for i in range(0, len(ip_list), chunk_size):
+            ip_chunk = ip_list[i : i + chunk_size]
+            escaped_ips = [re.escape(ip) for ip in ip_chunk]
+            ips_regex = "|".join(escaped_ips)
 
-            # collect data from the current table
-            for record in table.records:
-                timestamp = record.get_time()
+            flux = build_flux_query(ips_regex)
 
-                # skip timestamps not aligned to 10-minute boundaries
-                if not self.is_aligned_10_min(timestamp):
-                    # logger.debug(
-                    #     "Skipping unaligned timestamp: %s", timestamp.isoformat()
-                    # )
+            results_flux = self.qapi.query(flux)
+
+            for table in results_flux:
+                if not table.records:
                     continue
 
-                if ip in data:
+                ip = table.records[0].values.get("agent_host")
+                if ip not in all_data:
+                    all_data[ip] = {}
+                    all_data[ip]["unit"] = table.records[0].get_measurement()
+
+                for record in table.records:
+                    timestamp = record.get_time()
+
+                    if not self.is_aligned_10_min(timestamp):
+                        continue
+
                     field_name = rename_map.get(record.get_field(), record.get_field())
-                    if field_name not in data[ip]:
-                        data[ip][field_name] = {}
+                    if field_name not in all_data[ip]:
+                        all_data[ip][field_name] = {}
 
-                # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
-                value = record.get_value()
-                time = record.get_time()
+                    value = record.get_value()
+                    time = record.get_time()
 
-                # If value is None and field is one of the special cases, set to 0.0
-                if value is None and field_name in {
-                    "tx_power",
-                    "temperature",
-                    "rx_power",
-                }:
-                    data[ip][field_name][time] = 0.0
-                else:
-                    data[ip][field_name][time] = value
-                return data
+                    if value is None and field_name in {
+                        "tx_power",
+                        "temperature",
+                        "rx_power",
+                    }:
+                        all_data[ip][field_name][time] = 0.0
+                    else:
+                        all_data[ip][field_name][time] = value
+        return all_data
 
     @measure_time
     def query_units(
@@ -332,8 +224,8 @@ class InfluxManager:
         start: datetime,
         end: datetime,
         interval: int,
-        realtime_optimization: bool = False,
-        force_data_refresh: bool = False,
+        rolling_values: int = None,
+        compensate_historic: bool = False,
     ) -> dict:
         """
         Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
@@ -345,26 +237,34 @@ class InfluxManager:
         :param interval: time interval in minutes
         :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
         """
-        orig_start = start
-        if realtime_optimization and not force_data_refresh:
-            old_influx_data = None
-            if exists("temp_data/temp_data.pkl"):
-                with open("temp_data/temp_data.pkl", "rb") as f:
-                    old_influx_data = pickle.load(f)
-                # get the min and max (start and end) of previous influx data download iteration
-                _, old_end = get_max_min_time(old_influx_data)
-                # if the data are recent, new start equals end of previous iteration
-                if old_end > start:
-                    start = old_end
 
-        # modify boundary times to be multiples of input time interval
-        start += timedelta(
-            seconds=(
-                (math.ceil((start.minute + 0.1) / interval) * interval) - start.minute
-            )
-            * 60
+        if compensate_historic:
+            num_nan_samples = rolling_values
+            compensation_seconds = num_nan_samples * interval * 60
+            start -= timedelta(seconds=compensation_seconds)
+
+        # align start down to the nearest `interval` multiple
+        start -= timedelta(
+            minutes=start.minute % interval,
+            seconds=start.second,
+            microseconds=start.microsecond,
         )
-        end += timedelta(seconds=(-1 * (end.minute % interval)) * 60)
+
+        end -= timedelta(
+            minutes=end.minute % interval,
+            seconds=end.second,
+            microseconds=end.microsecond,
+        )
+
+        # # modify boundary times to be multiples of input time interval
+        # start += timedelta(
+        #     seconds=(
+        #         (math.ceil((start.minute + 0.1) / interval) * interval) - start.minute
+        #     )
+        #     * 60
+        # )
+        # print(start)
+        # end += timedelta(seconds=(-1 * (end.minute % interval)) * 60)
 
         # convert params to query substrings
         start_str = datetime_rfc(start)
@@ -376,52 +276,18 @@ class InfluxManager:
         for ip in ips[1:]:
             ips_str += f"|{ip}"
 
-        if end < self.OLD_NEW_DATA_BORDER:
-            return self._raw_query_old_bucket(start_str, end_str, ips_str, interval_str)
-        else:
-            if (
-                realtime_optimization
-                and old_influx_data is not None
-                and not force_data_refresh
-            ):
-                logger.info(
-                    "[INFO] Updating the start and end of new data query to: from %s to %s.",
-                    old_end,
-                    end,
-                )
-                new_influx_data = self._raw_query_new_bucket(
-                    start_str, end_str, ips_str, interval_str
-                )
-
-                len_of_old_data = count_entries(old_influx_data)
-                len_of_new_data = count_entries(new_influx_data)
-
-                if len_of_old_data != len_of_new_data:
-                    logger.info(
-                        "[INFO] The number of CMLs for old_influx_data and new_influx_data is different! (%d vs. %d)",
-                        len_of_old_data,
-                        len_of_new_data,
-                    )
-
-                updated_data = filter_and_prepend(
-                    old_influx_data, new_influx_data, orig_start
-                )
-                print(
-                    f"Updated data size: {sum(len(v) for k, v in updated_data.items() if isinstance(v, dict))}"
-                )
-                return updated_data
-            else:
-                return self._raw_query_new_bucket(
-                    start_str, end_str, ips_str, interval_str
-                )
+        return self._raw_query_new_bucket(
+            start_str,
+            end_str,
+            ips_str,
+            interval_str,
+        )
 
     def query_units_realtime(
         self,
         ips: list,
         realtime_window_str: str,
         interval: int,
-        realtime_optimization: bool = False,
-        force_data_refresh: bool = False,
     ) -> dict[str, Union[dict[str, dict[datetime, float]], str]]:
         """
         Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
@@ -451,8 +317,6 @@ class InfluxManager:
             start,
             end,
             interval,
-            realtime_optimization=realtime_optimization,
-            force_data_refresh=force_data_refresh,
         )
 
     def write_points(self, points, bucket):

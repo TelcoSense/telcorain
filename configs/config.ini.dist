@@ -1,6 +1,7 @@
 [setting]
 repetition_interval = 600
 sleep_interval = 30
+compensate_historic=True
 
 [logging]
 init_level=INFO

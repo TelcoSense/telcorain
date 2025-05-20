@@ -34,7 +34,6 @@ class Calculation:
         self.selection: dict[int, int] = selection
         self.realtime_runs: int = 0
         self.thousands_runs: int = 0
-        self.force_data_refresh: bool = False
 
         # calculation parameters dictionary
         self.cp = cp
@@ -68,7 +67,6 @@ class Calculation:
                 log_run_id=log_run_id,
                 realtime=self.cp["realtime"]["is_realtime"],
                 realtime_timewindow=realtime_timewindow,
-                force_data_refresh=self.force_data_refresh,
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel
@@ -145,12 +143,14 @@ class CalculationHistoric:
         links: dict[int, MwLink],
         selection: dict[int, int],
         cp: dict,
+        compensate_historic: bool,
     ):
 
         self.influx_man: InfluxManager = influx_man
         self.results_id: int = results_id
         self.links: dict[int, MwLink] = links
         self.selection: dict[int, int] = selection
+        self.compensate_historic = compensate_historic
 
         # calculation parameters dictionary
         self.cp = cp
@@ -177,6 +177,7 @@ class CalculationHistoric:
                 links=self.links,
                 log_run_id=log_run_id,
                 realtime=False,
+                compensate_historic=self.compensate_historic,
             )
 
             # Merge influx data with metadata into datasets, resolve Tx power assignment to correct channel
@@ -188,6 +189,7 @@ class CalculationHistoric:
                 log_run_id=log_run_id,
             )
             del influx_data
+
         except ProcessingException:
             return
 
@@ -209,6 +211,7 @@ class CalculationHistoric:
                     calc_data=calc_data,
                     cp=self.cp,
                     rain_grids=self.rain_grids,
+                    log_run_id=log_run_id,
                 )
             )
         except RainfieldsGenException:

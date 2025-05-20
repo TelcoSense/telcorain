@@ -48,7 +48,7 @@ def load_data_from_influxdb(
     log_run_id: str = "default",
     realtime: bool = False,
     realtime_timewindow: str = "1d",
-    force_data_refresh: bool = False,
+    compensate_historic: bool = False,
 ) -> tuple[
     dict[str, Union[dict[str, dict[datetime, float]], str]], list[int], list[str]
 ]:
@@ -66,7 +66,6 @@ def load_data_from_influxdb(
                 realtime_timewindow,
                 cp["time"]["step"],
                 cp["realtime"]["realtime_optimization"],
-                force_data_refresh,
             )
 
         # In other case, notify we are doing historic calculation
@@ -77,6 +76,8 @@ def load_data_from_influxdb(
                 cp["time"]["start"],
                 cp["time"]["end"],
                 cp["time"]["step"],
+                cp["wet_dry"]["rolling_values"],
+                compensate_historic,
             )
 
         diff = len(ips) - len(influx_data)
