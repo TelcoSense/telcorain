@@ -521,6 +521,9 @@ class Writer:
             )
             return
 
+        if not os.path.exists("outputs_historic"):
+            os.makedirs("outputs_historic")
+
         if self.config["setting"]["compensate_historic"]:
             desired_start = self.cp["time"]["start"]
             # filter calc_dataset by time
