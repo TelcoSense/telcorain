@@ -12,12 +12,12 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 setup_init_logging(logger)
 
 
-def run_hist_calc(cp: dict, links_id: list):
+def run_hist_calc(cp: dict):
     # load global config dict
     config = create_cp_dict(path="./configs/config.ini", format=False)
     compensate_historic = config["setting"]["compensate_historic"]
 
-    # add cp info nonrelevant for web app
+    # add cp config info nonrelevant for web app
     cp.update(
         {
             "external_filter": {
@@ -89,7 +89,7 @@ def run_hist_calc(cp: dict, links_id: list):
     sql_man = SqlManager()
     # load link definitions from MariaDB
     links = sql_man.load_metadata(
-        ids=links_id,
+        ids=cp["user_info"]["links_id"],
         min_length=cp["cml"]["min_length"],
         max_length=cp["cml"]["max_length"],
     )
@@ -132,20 +132,25 @@ def run_hist_calc(cp: dict, links_id: list):
 
 
 if __name__ == "__main__":
+    # this comes from the web app settings
     cp = {
+        # time setting (probably dont change step and output_step)
         "time": {
             "step": 10,
             "output_step": 10,
-            "start": datetime(2024, 9, 19, 3, 30, tzinfo=timezone.utc),
-            "end": datetime(2024, 9, 19, 20, 30, tzinfo=timezone.utc),
+            "start": datetime(2025, 3, 19, 3, 30, tzinfo=timezone.utc),
+            "end": datetime(2025, 3, 19, 20, 30, tzinfo=timezone.utc),
         },
+        # CML filtering
         "cml": {
             "min_length": 0.5,
-            "max_length": float("inf"),
+            "max_length": 100,
+        },
+        # user info for folder names and link selection (list of IDs)
+        "user_info": {
+            "folder_name": "kraken",
+            "links_id": [i for i in range(1000, 2000)],
         },
     }
 
-    # links_id = [1086, 1042, 1348, 1598, 338, 844, 845, 963, 557, 993, 1365, 269]
-    links_id = [i for i in range(1000, 2000)]
-
-    run_hist_calc(cp, links_id)
+    run_hist_calc(cp)

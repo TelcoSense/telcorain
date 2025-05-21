@@ -338,8 +338,9 @@ class Writer:
         self.config = config
         self.is_crop_enabled = self.cp["rendering"]["is_crop_enabled"]
         self.geojson_file = self.cp["rendering"]["geojson_file"]
-        self.output_dir = self.config["directories"]["outputs_web"]
-        self.outputs_raw_dir = self.config["directories"]["outputs_raw"]
+        self.user_dir = self.cp["user_info"]["folder_name"]
+        self.output_dir = f"outputs_historic/{self.user_dir}_web"
+        self.outputs_raw_dir = f"outputs_historic/{self.user_dir}_raw"
 
     def _write_raingrids(
         self,

@@ -4,6 +4,7 @@
 /outputs_web
 /outputs_center
 /logs
+/outputs_historic/*
 
 /configs/config.ini
 /configs/config_calc.ini
