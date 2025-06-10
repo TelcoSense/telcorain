@@ -210,7 +210,6 @@ def get_rain_rates(
             )
 
             current_link += 1
-
         return calc_data
 
     except BaseException as error:

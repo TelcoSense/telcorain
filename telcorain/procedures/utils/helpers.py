@@ -105,17 +105,10 @@ def create_cp_dict(path: str, format: bool = True) -> dict:
     return cp
 
 
-# def select_all_links(links: list[MwLink]) -> dict[int, int]:
-#     selected_links = {}
-#     for link in links:
-#         selected_links[links[link].link_id] = 3
-#     return selected_links
-
-
-def select_all_links(links: dict[int, MwLink]) -> dict[int, int]:
+def select_all_links(links: list[MwLink]) -> dict[int, int]:
     selected_links = {}
-    for link in links.values():
-        selected_links[link.link_id] = 3
+    for link in links:
+        selected_links[links[link].link_id] = 3
     return selected_links
 
 

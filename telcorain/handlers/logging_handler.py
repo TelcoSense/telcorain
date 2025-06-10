@@ -51,6 +51,7 @@ def setup_init_logging(logger, logs_dir: str = "./logs") -> None:
     logger.addHandler(init_logger)
     logger.setLevel(config_handler.read_option("logging", "init_level"))
     sys.stdout = TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+    # stream_handler = logging.StreamHandler(sys.stdout)
     setup_file_logging(logger, logs_dir)
 
 
@@ -65,5 +66,6 @@ def setup_file_logging(logger, logs_dir: str = "./logs") -> None:
         fmt="[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     file_formatter.converter = time.gmtime  # use UTC time
+    # stream_handler.setFormatter(file_formatter)
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)

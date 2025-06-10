@@ -13,8 +13,6 @@ from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import calc_distance
 
-from typing import Optional
-
 
 class SqlManager:
     """
@@ -466,7 +464,7 @@ class SqlManager:
 
     def delete_old_data(self, current_time: datetime, retention_window: datetime):
         """
-        Delete data that are older than realtime_window
+        Delete data that are older than retention_window
         """
         total_delete_rows = 0
         try:

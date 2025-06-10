@@ -147,26 +147,12 @@ class InfluxManager:
         end_str: str,
         ip_list: list,
         interval_str: str,
-        chunk_size: int = 1500,
+        chunk_size: int = 5000,
     ) -> dict:
         """
-        Queries InfluxDB in chunks of IPs to avoid overly large regex filters.
+        Optimized version of the query with better chunk handling.
         """
         all_data = {}
-
-        # helper to build the Flux query for a given IP chunk
-        def build_flux_query(ips_regex: str) -> str:
-            return (
-                f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
-                f"  |> range(start: {start_str}, stop: {end_str})\n"
-                f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" '
-                f'or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
-                f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_regex}/)\n'
-                f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
-                f'  |> yield(name: "mean")'
-            )
-
-        # Rename map for fields
         rename_map = {
             "Teplota": "temperature",
             "PrijimanaUroven": "rx_power",
@@ -175,47 +161,259 @@ class InfluxManager:
             "Signal": "rx_power",
         }
 
-        # process IPs in chunks
-        for i in range(0, len(ip_list), chunk_size):
-            ip_chunk = ip_list[i : i + chunk_size]
-            escaped_ips = [re.escape(ip) for ip in ip_chunk]
-            ips_regex = "|".join(escaped_ips)
+        # Pre-escape all IPs once
+        escaped_ips = [re.escape(ip) for ip in ip_list]
 
-            flux = build_flux_query(ips_regex)
+        # Process in chunks but with parallel queries if possible
+        for i in range(0, len(escaped_ips), chunk_size):
+            ip_chunk = escaped_ips[i : i + chunk_size]
+            ips_regex = "|".join(ip_chunk)
 
-            results_flux = self.qapi.query(flux)
+            flux = (
+                f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+                f"  |> range(start: {start_str}, stop: {end_str})\n"
+                f'  |> filter(fn: (r) => r["_field"] == "Teplota" or '
+                f'r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon" or '
+                f'r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
+                f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_regex}/)\n'
+                f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+                f'  |> yield(name: "mean")'
+            )
 
-            for table in results_flux:
-                if not table.records:
+            try:
+                results_flux = self.qapi.query(flux)
+                self._process_results(results_flux, all_data, rename_map)
+            except Exception as e:
+                # If chunk fails, try smaller chunks
+                if "compiled too big" in str(e):
+                    print("Too big query, trying smaller one...")
+                    self._raw_query_new_bucket(
+                        start_str,
+                        end_str,
+                        ip_list[i : i + chunk_size],
+                        interval_str,
+                        chunk_size=chunk_size - 1000,
+                    )
+                else:
+                    raise
+
+        return all_data
+
+    def _process_results(self, results_flux, all_data, rename_map):
+        """Helper to process query results."""
+        for table in results_flux:
+            if not table.records:
+                continue
+
+            ip = table.records[0].values.get("agent_host")
+            if ip not in all_data:
+                all_data[ip] = {}
+                all_data[ip]["unit"] = table.records[0].get_measurement()
+
+            for record in table.records:
+                if not self.is_aligned_10_min(record.get_time()):
                     continue
 
-                ip = table.records[0].values.get("agent_host")
-                if ip not in all_data:
-                    all_data[ip] = {}
-                    all_data[ip]["unit"] = table.records[0].get_measurement()
+                field_name = rename_map.get(record.get_field(), record.get_field())
+                if field_name not in all_data[ip]:
+                    all_data[ip][field_name] = {}
 
-                for record in table.records:
-                    timestamp = record.get_time()
+                value = record.get_value()
+                time = record.get_time()
 
-                    if not self.is_aligned_10_min(timestamp):
-                        continue
+                if value is None and field_name in {
+                    "tx_power",
+                    "temperature",
+                    "rx_power",
+                }:
+                    all_data[ip][field_name][time] = 0.0
+                else:
+                    all_data[ip][field_name][time] = value
 
-                    field_name = rename_map.get(record.get_field(), record.get_field())
-                    if field_name not in all_data[ip]:
-                        all_data[ip][field_name] = {}
+    # @measure_time
+    # def _raw_query_new_bucket(
+    #     self, start_str: str, end_str: str, ips_str: str, interval_str: str
+    # ) -> dict:
+    #     flux = (
+    #         f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+    #         + f"  |> range(start: {start_str}, stop: {end_str})\n"
+    #         + f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
+    #         + f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_str}/)\n'
+    #         + f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+    #         + f'  |> yield(name: "mean")'
+    #     )
 
-                    value = record.get_value()
-                    time = record.get_time()
+    #     results_flux = self.qapi.query(flux)
 
-                    if value is None and field_name in {
-                        "tx_power",
-                        "temperature",
-                        "rx_power",
-                    }:
-                        all_data[ip][field_name][time] = 0.0
-                    else:
-                        all_data[ip][field_name][time] = value
-        return all_data
+    #     data = {}
+
+    #     # map raw fields to the result dictionary
+    #     rename_map = {
+    #         "Teplota": "temperature",
+    #         "PrijimanaUroven": "rx_power",
+    #         "VysilaciVykon": "tx_power",
+    #         "Vysilany_Vykon": "tx_power",
+    #         "Signal": "rx_power",
+    #     }
+    #     for table in results_flux:
+    #         ip = table.records[0].values.get("agent_host")
+
+    #         # initialize new IP record in the result dictionary
+    #         if ip not in data:
+    #             data[ip] = {}
+    #             data[ip]["unit"] = table.records[0].get_measurement()
+
+    #         # collect data from the current table
+    #         for record in table.records:
+
+    #             # skip timestamps not aligned to 10-minute boundaries
+    #             timestamp = record.get_time()
+    #             if not self.is_aligned_10_min(timestamp):
+    #                 # logger.debug(
+    #                 #     "Skipping unaligned timestamp: %s", timestamp.isoformat()
+    #                 # )
+    #                 continue
+
+    #             if ip in data:
+    #                 field_name = rename_map.get(record.get_field(), record.get_field())
+    #                 if field_name not in data[ip]:
+    #                     data[ip][field_name] = {}
+
+    #             # correct bad Tx Power and Temperature data in InfluxDB in case of missing zero values
+    #             value = record.get_value()
+    #             time = record.get_time()
+
+    #             # If value is None and field is one of the special cases, set to 0.0
+    #             if value is None and field_name in {
+    #                 "tx_power",
+    #                 "temperature",
+    #                 "rx_power",
+    #             }:
+    #                 data[ip][field_name][time] = 0.0
+    #             else:
+    #                 data[ip][field_name][time] = value
+    #     return data
+
+    # @measure_time
+    # def _raw_query_new_bucket(
+    #     self,
+    #     start_str: str,
+    #     end_str: str,
+    #     ip_list: list,
+    #     interval_str: str,
+    #     chunk_size: int = 1500,
+    # ) -> dict:
+    #     """
+    #     Queries InfluxDB in chunks of IPs to avoid overly large regex filters.
+    #     """
+    #     all_data = {}
+
+    #     # helper to build the Flux query for a given IP chunk
+    #     def build_flux_query(ips_regex: str) -> str:
+    #         return (
+    #             f'from(bucket: "{self.BUCKET_NEW_DATA}")\n'
+    #             f"  |> range(start: {start_str}, stop: {end_str})\n"
+    #             f'  |> filter(fn: (r) => r["_field"] == "Teplota" or r["_field"] == "VysilaciVykon" '
+    #             f'or r["_field"] == "Vysilany_Vykon" or r["_field"] == "PrijimanaUroven" or r["_field"] == "Signal")\n'
+    #             f'  |> filter(fn: (r) => r["agent_host"] =~ /{ips_regex}/)\n'
+    #             f"  |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)\n"
+    #             f'  |> yield(name: "mean")'
+    #         )
+
+    #     # Rename map for fields
+    #     rename_map = {
+    #         "Teplota": "temperature",
+    #         "PrijimanaUroven": "rx_power",
+    #         "VysilaciVykon": "tx_power",
+    #         "Vysilany_Vykon": "tx_power",
+    #         "Signal": "rx_power",
+    #     }
+
+    #     # process IPs in chunks
+    #     for i in range(0, len(ip_list), chunk_size):
+    #         ip_chunk = ip_list[i : i + chunk_size]
+    #         escaped_ips = [re.escape(ip) for ip in ip_chunk]
+    #         ips_regex = "|".join(escaped_ips)
+
+    #         flux = build_flux_query(ips_regex)
+
+    #         results_flux = self.qapi.query(flux)
+
+    #         for table in results_flux:
+    #             if not table.records:
+    #                 continue
+
+    #             ip = table.records[0].values.get("agent_host")
+    #             if ip not in all_data:
+    #                 all_data[ip] = {}
+    #                 all_data[ip]["unit"] = table.records[0].get_measurement()
+
+    #             for record in table.records:
+    #                 timestamp = record.get_time()
+
+    #                 if not self.is_aligned_10_min(timestamp):
+    #                     continue
+
+    #                 field_name = rename_map.get(record.get_field(), record.get_field())
+    #                 if field_name not in all_data[ip]:
+    #                     all_data[ip][field_name] = {}
+
+    #                 value = record.get_value()
+    #                 time = record.get_time()
+
+    #                 if value is None and field_name in {
+    #                     "tx_power",
+    #                     "temperature",
+    #                     "rx_power",
+    #                 }:
+    #                     all_data[ip][field_name][time] = 0.0
+    #                 else:
+    #                     all_data[ip][field_name][time] = value
+    #     return all_data
+
+    # @measure_time
+    # def query_units(
+    #     self,
+    #     ips: list,
+    #     start: datetime,
+    #     end: datetime,
+    #     interval: int,
+    # ) -> dict:
+    #     """
+    #     Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (as identifiers = tags in InfluxDB).
+    #     Query is done for the time interval defined by 'start' and 'end' QDateTime objects, with 'interval' in seconds.
+
+    #     :param ips: list of IP addresses of CMLs to query
+    #     :param start: QDateTime object with start of the query interval
+    #     :param end: QDateTime object with end of the query interval
+    #     :param interval: time interval in minutes
+    #     :return: dictionary with queried data, with IP addresses as keys and fields with time series as values
+    #     """
+    #     orig_start = start
+
+    #     # modify boundary times to be multiples of input time interval
+    #     start += timedelta(
+    #         seconds=(
+    #             (math.ceil((start.minute + 0.1) / interval) * interval) - start.minute
+    #         )
+    #         * 60
+    #     )
+    #     end += timedelta(seconds=(-1 * (end.minute % interval)) * 60)
+
+    #     # convert params to query substrings
+    #     start_str = datetime_rfc(start)
+    #     end_str = datetime_rfc(end)
+
+    #     interval_str = f"{interval * 60}s"  # time in seconds
+
+    #     ips_str = f"{ips[0]}"  # IP addresses in query format
+    #     for ip in ips[1:]:
+    #         ips_str += f"|{ip}"
+
+    #     if end < self.OLD_NEW_DATA_BORDER:
+    #         return self._raw_query_old_bucket(start_str, end_str, ips_str, interval_str)
+    #     else:
+    #         return self._raw_query_new_bucket(start_str, end_str, ips_str, interval_str)
 
     @measure_time
     def query_units(
@@ -255,16 +453,6 @@ class InfluxManager:
             seconds=end.second,
             microseconds=end.microsecond,
         )
-
-        # # modify boundary times to be multiples of input time interval
-        # start += timedelta(
-        #     seconds=(
-        #         (math.ceil((start.minute + 0.1) / interval) * interval) - start.minute
-        #     )
-        #     * 60
-        # )
-        # print(start)
-        # end += timedelta(seconds=(-1 * (end.minute % interval)) * 60)
 
         # convert params to query substrings
         start_str = datetime_rfc(start)

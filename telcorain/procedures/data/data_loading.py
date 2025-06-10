@@ -65,7 +65,6 @@ def load_data_from_influxdb(
                 ips,
                 realtime_timewindow,
                 cp["time"]["step"],
-                cp["realtime"]["realtime_optimization"],
             )
 
         # In other case, notify we are doing historic calculation
