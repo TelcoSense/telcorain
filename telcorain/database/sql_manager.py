@@ -121,9 +121,7 @@ class SqlManager:
                 if ids is not None and len(ids) > 0:
                     placeholder = ", ".join(["%s"] * len(ids))
                     query += f" WHERE links.ID IN ({placeholder})"
-                query += ";"
-
-                if ids is not None and len(ids) > 0:
+                    query += ";"
                     cursor.execute(query, ids)
                 else:
                     cursor.execute(query)

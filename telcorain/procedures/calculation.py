@@ -78,10 +78,6 @@ class Calculation:
                 log_run_id=log_run_id,
             )
 
-            # je to safe? neni lepsi drzet influx data v ramce? asi zalezi na nastaveni...
-            if self.cp["realtime"]["realtime_optimization"]:
-                with open("temp_data/temp_data.pkl", "wb") as f:
-                    pickle.dump(influx_data, f)
             del influx_data
 
         except ProcessingException:
