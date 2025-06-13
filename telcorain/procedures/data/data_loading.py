@@ -11,32 +11,62 @@ from telcorain.procedures.exceptions import ProcessingException
 from telcorain.procedures.utils.helpers import measure_time
 
 
+# @measure_time
+# def _get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:
+#     if len(selected_links) < 1:
+#         raise ValueError("Empty selection array.")
+
+#     ips = []
+#     for link in selected_links:
+#         if link in links:
+#             # TODO: add dynamic exception list of constant Tx power devices
+#             # 1S10s have constant Tx power, so only one unit can be included in query
+#             # otherwise, both ends needs to be included in query, due Tx power correction
+#             if links[link].tech in ["1s10", "summit", "summit_bt"]:
+#                 if selected_links[link] == 1:
+#                     ips.append(links[link].ip_a)
+#                 elif selected_links[link] == 2:
+#                     ips.append(links[link].ip_b)
+#                 elif selected_links[link] == 3:
+#                     ips.append(links[link].ip_a)
+#                     ips.append(links[link].ip_b)
+#             elif selected_links[link] == 0:
+#                 continue
+#             else:
+#                 ips.append(links[link].ip_a)
+#                 ips.append(links[link].ip_b)
+
+#     return ips
+
+
 @measure_time
 def _get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:
     if len(selected_links) < 1:
         raise ValueError("Empty selection array.")
 
     ips = []
-    for link in selected_links:
-        if link in links:
-            # TODO: add dynamic exception list of constant Tx power devices
-            # 1S10s have constant Tx power, so only one unit can be included in query
-            # otherwise, both ends needs to be included in query, due Tx power correction
-            if links[link].tech in ["1s10", "summit", "summit_bt"]:
-                if selected_links[link] == 1:
-                    ips.append(links[link].ip_a)
-                elif selected_links[link] == 2:
-                    ips.append(links[link].ip_b)
-                elif selected_links[link] == 3:
-                    ips.append(links[link].ip_a)
-                    ips.append(links[link].ip_b)
-            elif selected_links[link] == 0:
-                continue
-            else:
-                ips.append(links[link].ip_a)
-                ips.append(links[link].ip_b)
+    for link_id in selected_links:
+        if link_id not in links:
+            continue
 
-    return ips
+        link = links[link_id]
+        selector = selected_links[link_id]
+
+        if link.tech in ["1s10", "summit", "summit_bt"]:
+            if selector == 1:
+                ips.append(link.ip_a)
+            elif selector == 2:
+                ips.append(link.ip_b)
+            elif selector == 3:
+                ips.append(link.ip_a)
+                ips.append(link.ip_b)
+        elif selector == 0:
+            continue
+        else:
+            ips.append(link.ip_a)
+            ips.append(link.ip_b)
+
+    return list(set(ips))  # remove duplicates
 
 
 @measure_time

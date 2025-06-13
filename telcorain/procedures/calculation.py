@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Union
 from os.path import exists
 
-import pickle
 import numpy as np
 import xarray as xr
 
@@ -77,7 +76,6 @@ class Calculation:
                 missing_links=missing_links,
                 log_run_id=log_run_id,
             )
-
             del influx_data
 
         except ProcessingException:

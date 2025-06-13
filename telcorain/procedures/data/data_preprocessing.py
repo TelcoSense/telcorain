@@ -176,6 +176,171 @@ def _sort_into_channels(
         return channels
 
 
+# @measure_time
+# def convert_to_link_datasets(
+#     selected_links: dict[int, int],
+#     links: dict[int, MwLink],
+#     influx_data: dict[str, Union[dict[str, dict[datetime, float]], str]],
+#     missing_links: list[int],
+#     log_run_id: str = "default",
+# ) -> list[xr.Dataset]:
+#     """
+#     Merge raw influx data with link metadata and convert them into a list of xarray datasets, each representing a link.
+#     """
+#     try:
+#         calc_data = []
+#         link_count = len(selected_links)
+#         current_link = 0
+
+#         # Create a set of missing IPs for faster lookup
+#         missing_ips = set()
+#         for link_id in missing_links:
+#             if link_id in links:
+#                 if links[link_id].ip_a:
+#                     missing_ips.add(links[link_id].ip_a)
+#                 if links[link_id].ip_b:
+#                     missing_ips.add(links[link_id].ip_b)
+
+#         for link_id in selected_links:
+#             if selected_links[link_id] == 0:
+#                 continue
+
+#             # Skip if we already know this link is missing
+#             if link_id in missing_links:
+#                 logger.debug(
+#                     "[%s] Skipping link ID: %d. No unit data available.",
+#                     log_run_id,
+#                     link_id,
+#                 )
+#                 continue
+
+#             link = links[link_id]
+#             tx_zeros_b = False
+#             tx_zeros_a = False
+
+#             is_a_in = link.ip_a in influx_data and link.ip_a not in missing_ips
+#             is_b_in = link.ip_b in influx_data and link.ip_b not in missing_ips
+
+#             # TODO: load from options list of constant Tx power devices
+#             is_constant_tx_power = link.tech in ("1s10", "summit", "summit_bt")
+#             # TODO: load from options list of bugged techs with missing Tx zeros in InfluxDB
+#             is_tx_power_bugged = link.tech in ("ceragon_ip_10",)
+
+#             # skip links, where data of one unit (or both) are not available
+#             # but constant Tx power devices are exceptions
+#             if not (is_a_in and is_b_in):
+#                 if not ((is_a_in != is_b_in) and is_constant_tx_power):
+#                     if link_id not in missing_links:
+#                         logger.debug(
+#                             "[%s] Skipping link ID: %d. No unit data available.",
+#                             log_run_id,
+#                             link_id,
+#                         )
+#                         missing_links.append(link_id)  # Mark as missing for future runs
+#                     continue
+
+#             # skip links with missing Tx power data on the one of the units (unable to do Tx power correction)
+#             # Orcaves 1S10 and IP10Gs have constant Tx power, so it doesn't matter
+#             if is_constant_tx_power:
+#                 tx_zeros_b = True
+#                 tx_zeros_a = True
+#             elif ("tx_power" not in influx_data[link.ip_a]) or (
+#                 "tx_power" not in influx_data[link.ip_b]
+#             ):
+#                 # sadly, some devices of certain techs are badly exported from original source, and they are
+#                 # missing Tx zero values in InfluxDB, so this hack needs to be done
+#                 # (for other techs, there is no certainty, if original Tx value was zero in fact, or it's a NMS
+#                 # error and these values are missing, so it's better to skip that links)
+#                 if is_tx_power_bugged:
+#                     logger.debug(
+#                         '[%s] Link ID: %d. No Tx Power data available. Link technology "%s" is on'
+#                         " exception list -> filling Tx data with zeros.",
+#                         log_run_id,
+#                         link_id,
+#                         link.tech,
+#                     )
+#                     if "tx_power" not in influx_data[link.ip_b]:
+#                         tx_zeros_b = True
+#                     if "tx_power" not in influx_data[link.ip_a]:
+#                         tx_zeros_a = True
+#                 else:
+#                     logger.debug(
+#                         "[%s] Skipping link ID: %d. No Tx Power data available.",
+#                         log_run_id,
+#                         link_id,
+#                     )
+#                     continue
+
+#             # hack: since one dimensional freq var in xarray is crashing pycomlink, change one freq negligibly to
+#             # preserve an array of two frequencies (channel A, channel B)
+#             if link.freq_a == link.freq_b:
+#                 link.freq_a += 1
+
+#             link_channels = []
+
+#             # Side/unit A (channel B to A)
+#             unit_a_channels = _sort_into_channels(
+#                 influx_data=influx_data,
+#                 links=links,
+#                 link_id=link_id,
+#                 link_channel_selector=selected_links[link_id],
+#                 tx_ip=link.ip_b,
+#                 rx_ip=link.ip_a,
+#                 tx_tx_zeros=tx_zeros_b,
+#                 tx_rx_zeros=tx_zeros_a,
+#                 tx_freq=link.freq_b,
+#                 rx_freq=link.freq_a,
+#                 is_opposite_included=is_b_in,
+#                 channel_identifier=ChannelIdentifier.CHANNEL_0,
+#                 log_run_id=log_run_id,
+#             )
+#             if unit_a_channels is not None:
+#                 link_channels.extend(unit_a_channels)
+#             else:
+#                 continue
+
+#             # Side/unit B (channel A to B)
+#             unit_b_channels = _sort_into_channels(
+#                 influx_data=influx_data,
+#                 links=links,
+#                 link_id=link_id,
+#                 link_channel_selector=selected_links[link_id],
+#                 tx_ip=link.ip_a,
+#                 rx_ip=link.ip_b,
+#                 tx_tx_zeros=tx_zeros_a,
+#                 tx_rx_zeros=tx_zeros_b,
+#                 tx_freq=link.freq_a,
+#                 rx_freq=link.freq_b,
+#                 is_opposite_included=is_a_in,
+#                 channel_identifier=ChannelIdentifier.CHANNEL_1,
+#                 log_run_id=log_run_id,
+#             )
+#             if unit_b_channels is not None:
+#                 link_channels.extend(unit_b_channels)
+#             else:
+#                 continue
+
+#             calc_data.append(xr.concat(link_channels, dim="channel_id"))
+#             current_link += 1
+
+#         return calc_data
+
+#     except BaseException as error:
+#         logger.error(
+#             "[%s] An unexpected error occurred during data processing: %s %s.\n"
+#             "Last processed microwave link ID: %d\n"
+#             "Calculation thread terminated.",
+#             log_run_id,
+#             type(error),
+#             error,
+#             link_id,
+#         )
+#         traceback.print_exc()
+#         raise ProcessingException(
+#             "Error occurred during influx data merging with metadata into xarray datasets."
+#         )
+
+
 @measure_time
 def convert_to_link_datasets(
     selected_links: dict[int, int],
