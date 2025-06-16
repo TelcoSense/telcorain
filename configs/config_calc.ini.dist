@@ -4,10 +4,19 @@ output_step=10
 start=2024-09-19T03:30:00
 end=2024-09-19T12:30:00
 
+[realtime]
+is_realtime=False
+realtime_timewindow=7d
+is_output_write=True
+is_history_write=False
+is_force_write=False
+is_influx_write_skipped=False
+is_sql_write_skipped=False
+
 [wet_dry]
 is_mlp_enabled=False
 rolling_hours=1.0
-rolling_values=30
+rolling_values=10
 wet_dry_deviation=0.8
 is_window_centered=False
 baseline_samples=5
@@ -24,7 +33,7 @@ correlation_threshold=0.7
 [interp]
 interp_res=0.01
 idw_power=1
-idw_near=30
+idw_near=35
 idw_dist=1.5
 
 [raingrids]
@@ -46,16 +55,6 @@ map=plain_czechia.png
 
 [cml]
 min_length=0.5
-
-[realtime]
-is_realtime=True
-realtime_timewindow=1d
-retention=10080
-is_output_write=True
-is_history_write=True
-is_force_write=True
-is_influx_write_skipped=False
-is_sql_write_skipped=False
 
 [external_filter]
 url=http://192.168.64.166/chmi/data/CZRAD_10m

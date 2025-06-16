@@ -2,7 +2,7 @@
 url=http://localhost:8086
 org=
 token=
-timeout=10000
+timeout=1000
 verify_ssl=False
 bucket_out_cml=
 

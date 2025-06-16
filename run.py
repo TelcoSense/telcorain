@@ -15,7 +15,6 @@ setup_init_logging(logger)
 def run_hist_calc(cp: dict):
     # load global config dict
     config = create_cp_dict(path="./configs/config.ini", format=False)
-    compensate_historic = config["setting"]["compensate_historic"]
 
     # add cp config info nonrelevant for web app
     cp.update(
@@ -31,6 +30,11 @@ def run_hist_calc(cp: dict):
                 "img_x_max": 20.765,
                 "img_y_min": 48.05,
                 "img_y_max": 52.165,
+            },
+            "historic": {
+                "write_historic": True,
+                "skip_influx": True,
+                "skip_sql": True,
             },
             "realtime": {
                 "is_realtime": False,
@@ -102,7 +106,7 @@ def run_hist_calc(cp: dict):
         links=links,
         selection=selected_links,
         cp=cp,
-        compensate_historic=compensate_historic,
+        compensate_historic=config["setting"]["compensate_historic"],
     )
     # run the calculation
     calculation.run()
@@ -115,9 +119,9 @@ def run_hist_calc(cp: dict):
     writer = Writer(
         sql_man=sql_man,
         influx_man=influx_man,
-        write_historic=True,
-        skip_influx=True,
-        skip_sql=True,
+        write_historic=cp["historic"]["write_historic"],
+        skip_influx=cp["historic"]["skip_influx"],
+        skip_sql=cp["historic"]["skip_sql"],
         since_time=since_time,
         cp=cp,
         config=config,
