@@ -50,9 +50,11 @@ class ConfigHandler:
             "timeout": self.read_option("mariadb", "timeout"),
             "db_metadata": self.read_option("mariadb", "db_metadata"),
             "db_output": self.read_option("mariadb", "db_output"),
+            "exclude_cmls_path": self.read_option("mariadb", "exclude_cmls_path"),
         }
 
         return sql_configs
+
 
 class ConfigHandlerOut:
     """Class for handling and reading configuration file."""

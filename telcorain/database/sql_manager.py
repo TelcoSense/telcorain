@@ -1,6 +1,7 @@
 """Module containing class for handling MariaDB connection."""
 
 import json
+import csv
 from datetime import datetime
 from typing import Union
 
@@ -74,8 +75,57 @@ class SqlManager:
             self.connect()
             return self.is_connected
 
+    def get_link_ids_by_ips(
+        self,
+        txt_file_path: str,
+    ) -> list[int]:
+        """
+        Load link IDs from MariaDB for the IPs listed in a given text file.
+
+        :param txt_file_path: Path to the text file containing one IP per line.
+        :param connection: Active MariaDB connection object.
+        :return: List of matching link IDs.
+        """
+        try:
+            # Step 1: Read IPs from file
+            with open(txt_file_path, "r") as file:
+                ip_list = [line.strip() for line in file if line.strip()]
+
+            if not ip_list:
+                logger.warning("No IPs found in the provided file.")
+                return []
+
+            cursor = self.connection.cursor()
+
+            # Step 2: Prepare and run SQL query
+            placeholder = ", ".join(["%s"] * len(ip_list))
+            query = f"""
+            SELECT ID FROM links
+            WHERE IP_address_A IN ({placeholder})
+            OR IP_address_B IN ({placeholder});
+            """
+
+            # Provide the IPs twice (for IP_address_A and IP_address_B)
+            cursor.execute(query, ip_list + ip_list)
+
+            # Step 3: Collect matching link IDs
+            matching_ids = [row[0] for row in cursor.fetchall()]
+
+            return matching_ids
+
+        except mariadb.Error as e:
+            logger.error("Failed to fetch link IDs by IPs: %s", e)
+            return []
+        except FileNotFoundError:
+            logger.error("File not found: %s", txt_file_path)
+            return []
+
     def load_metadata(
-        self, ids=None, min_length: int = 0.01, max_length: float = float("inf")
+        self,
+        ids=None,
+        min_length: int = 0.01,
+        max_length: float = float("inf"),
+        exclude_ids: bool = True,
     ) -> dict[int, MwLink]:
         """
         Load metadata of CMLs from MariaDB.
@@ -126,6 +176,11 @@ class SqlManager:
                 else:
                     cursor.execute(query)
 
+                if exclude_ids:
+                    with open(str(self.settings["exclude_cmls_path"]), newline="") as f:
+                        reader = csv.reader(f)
+                        invalid_ids = set(int(row[0]) for row in reader if row)
+
                 links = {}
 
                 for (
@@ -154,6 +209,9 @@ class SqlManager:
                     )
 
                     if link_length < min_length or link_length > max_length:
+                        continue
+
+                    if exclude_ids and ID in invalid_ids:
                         continue
 
                     link = MwLink(

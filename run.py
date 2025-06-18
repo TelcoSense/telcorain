@@ -96,7 +96,9 @@ def run_hist_calc(cp: dict):
         ids=cp["user_info"]["links_id"],
         min_length=cp["cml"]["min_length"],
         max_length=cp["cml"]["max_length"],
+        exclude_ids=True,
     )
+
     # select all links
     selected_links = select_all_links(links=links)
     # define calculation object
@@ -153,7 +155,7 @@ if __name__ == "__main__":
         # user info for folder names and link selection (list of IDs)
         "user_info": {
             "folder_name": "kraken",
-            "links_id": [i for i in range(1000, 2000)],
+            "links_id": [i for i in range(1, 1000)],
         },
     }
 
