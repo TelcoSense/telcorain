@@ -18,7 +18,7 @@ address=127.0.0.1
 port=3306
 user=
 pass=
-timeout=1000
+timeout=10000
 db_metadata=cml_metadata
 db_output=telcorain_output
 exclude_cmls_path=invalid_cmls.csv
@@ -27,7 +27,7 @@ exclude_cmls_path=invalid_cmls.csv
 url=
 org=vut
 token=
-timeout=1000
+timeout=10000
 verify_ssl=False
 
 bucket_old_data=cbl

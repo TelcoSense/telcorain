@@ -127,6 +127,7 @@ class RealtimeWriter:
                     )
 
                 rain_grid = rain_grids[t]
+
                 if self.is_crop_enabled:
                     logger.debug(
                         "[WRITE] Cropping raingrid %s to the GeoJSON polygon(s)...",
@@ -148,7 +149,7 @@ class RealtimeWriter:
 
                 logger.debug("[WRITE] Raingrid %s successfully saved.", formatted_time)
 
-        logger.info("[WRITE] Saving raingrids -- DONE.")
+        logger.info("[WRITE] Saving raingrids locally -- DONE.")
 
     def _write_timeseries(
         self,
@@ -313,7 +314,6 @@ class Writer:
         write_historic: bool,
         skip_influx: bool,
         skip_sql: bool,
-        since_time: datetime,
         cp: dict,
         config: dict,
         influx_wipe_thread: Optional[Thread] = None,
@@ -333,7 +333,6 @@ class Writer:
         self.write_historic = write_historic
         self.skip_influx = skip_influx
         self.skip_sql = skip_sql
-        self.since_time = since_time
         self.influx_wipe_thread = influx_wipe_thread
         self.cp = cp
         self.config = config
@@ -349,8 +348,6 @@ class Writer:
         x_grid: np.ndarray,
         y_grid: np.ndarray,
         calc_dataset: Dataset,
-        np_last_time: np.datetime64,
-        np_since_time: np.datetime64,
     ):
         """
         Write raingrids metadata into MariaDB table and save them as PNG images and NPY raw data (if enabled).
@@ -375,15 +372,13 @@ class Writer:
 
         for t in range(len(calc_dataset.time)):
             time = calc_dataset.time[t]
-            if (time.values > np_last_time) and (
-                self.write_historic or (time.values > np_since_time)
-            ):
-                raingrid_time: datetime = datetime.utcfromtimestamp(
-                    dt64_to_unixtime(time.values)
-                )
-                formatted_time: str = raingrid_time.strftime("%Y-%m-%d %H:%M")
-                file_name: str = raingrid_time.strftime("%Y-%m-%d_%H%M")
+            raingrid_time: datetime = datetime.utcfromtimestamp(
+                dt64_to_unixtime(time.values)
+            )
+            formatted_time: str = raingrid_time.strftime("%Y-%m-%d %H:%M")
+            file_name: str = raingrid_time.strftime("%Y-%m-%d_%H%M")
 
+            if not os.path.exists(f"{self.outputs_raw_dir}/{file_name}.npy"):
                 logger.debug(
                     "[WRITE] Saving raingrid %s for web output...", formatted_time
                 )
@@ -430,13 +425,11 @@ class Writer:
 
                 logger.debug("[WRITE] Raingrid %s successfully saved.", formatted_time)
 
-        logger.info("[WRITE] Saving raingrids -- DONE.")
+        logger.info("[WRITE] Saving raingrids locally -- DONE.")
 
     def _write_timeseries(
         self,
         calc_dataset: Dataset,
-        np_last_time: np.datetime64,
-        np_since_time: np.datetime64,
     ):
         """
         Write individual CML rain instensity timeseries into InfluxDB.
@@ -444,10 +437,6 @@ class Writer:
         :param np_last_time: last raingrid time in the database
         :param np_since_time: time since last realtime calculation start (overwritten by historic write)
         """
-        if not self.write_historic and (np_since_time > np_last_time):
-            compare_time = np_since_time
-        else:
-            compare_time = np_last_time
 
         points_to_write = []
 
@@ -455,9 +444,11 @@ class Writer:
             "[WRITE: InfluxDB] Preparing rain timeseries from individual CMLs for writing into InfluxDB..."
         )
 
-        filtered = calc_dataset.where(calc_dataset.time > compare_time).dropna(
-            dim="time", how="all"
-        )
+        # filtered = calc_dataset.where(calc_dataset.time > compare_time).dropna(
+        #     dim="time", how="all"
+        # )
+        filtered = calc_dataset
+
         cmls_count = filtered.cml_id.size
         times_count = filtered.time.size
 
@@ -525,25 +516,16 @@ class Writer:
         if not os.path.exists("outputs_historic"):
             os.makedirs("outputs_historic")
 
-        if self.config["setting"]["compensate_historic"]:
-            desired_start = self.cp["time"]["start"]
-            # filter calc_dataset by time
-            calc_dataset = calc_dataset.sel(time=slice(desired_start, None))
-            # slice rain_grids to match the new dataset (assuming 1-to-1 time/sample mapping)
-            time_len = calc_dataset.sizes["time"]
-            rain_grids = rain_grids[-time_len:]
+        # if self.config["setting"]["compensate_historic"]:
+        #     desired_start = self.cp["time"]["start"]
+        #     # filter calc_dataset by time
+        #     calc_dataset = calc_dataset.sel(time=slice(desired_start, None))
+        #     # slice rain_grids to match the new dataset (assuming 1-to-1 time/sample mapping)
+        #     time_len = calc_dataset.sizes["time"]
+        #     rain_grids = rain_grids[-time_len:]
 
-        if not self.skip_sql:
-            last_record = self.sql_man.get_last_raingrid()
-            if len(last_record) > 0:
-                last_time = list(last_record.keys())[0]
-            else:
-                last_time = datetime.min
-        else:
-            last_time = datetime.min
-
-        np_last_time = np.datetime64(last_time)
-        np_since_time = np.datetime64(self.since_time)
+        # if not self.skip_sql:
+        #     last_record = self.sql_man.get_last_raingrid()
 
         if not os.path.exists(self.output_dir):
             os.mkdir(self.output_dir)
@@ -551,15 +533,18 @@ class Writer:
         if not os.path.exists(self.outputs_raw_dir):
             os.mkdir(self.outputs_raw_dir)
 
-        # I. RAINGRIDS INTO MARIADB
+        # I. RAINGRIDS SAVING LOCALLY AND TO MARIADB
         self._write_raingrids(
-            rain_grids, x_grid, y_grid, calc_dataset, np_last_time, np_since_time
+            rain_grids,
+            x_grid,
+            y_grid,
+            calc_dataset,
         )
         del rain_grids
 
-        # II. INDIVIDUAL CML TIMESERIES INTO INFLUXDB (if not skipped)
+        # II. INDIVIDUAL CML TIMESERIES INTO INFLUXDB
         if not self.skip_influx:
-            self._write_timeseries(calc_dataset, np_last_time, np_since_time)
+            self._write_timeseries(calc_dataset)
         del calc_dataset
 
         # unlock the influx manager

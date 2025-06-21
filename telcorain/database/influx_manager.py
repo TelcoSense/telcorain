@@ -165,6 +165,11 @@ class InfluxManager:
                     chunk_size=4000,
                 )
                 return data
+            else:
+                logger.error(
+                    "Error occured during InfluxDB write query, stopping. Maybe no connection to VPN? Error: %s",
+                    e,
+                )
 
         data = {}
 
@@ -257,7 +262,10 @@ class InfluxManager:
                         chunk_size=chunk_size - 1000,
                     )
                 else:
-                    raise
+                    logger.error(
+                        "Error occured during InfluxDB write query, stopping. Maybe no connection to VPN? Error: %s",
+                        e,
+                    )
 
         return all_data
 

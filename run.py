@@ -31,11 +31,6 @@ def run_hist_calc(cp: dict):
                 "img_y_min": 48.05,
                 "img_y_max": 52.165,
             },
-            "historic": {
-                "write_historic": True,
-                "skip_influx": True,
-                "skip_sql": True,
-            },
             "realtime": {
                 "is_realtime": False,
                 "realtime_timewindow": "7d",
@@ -86,8 +81,11 @@ def run_hist_calc(cp: dict):
                 "geojson_file": "czechia.json",
                 "map": "plain_czechia.png",
             },
-        }
+        },
     )
+
+    start_time = datetime.now()
+    logger.info("Starting the historic calculation at: %s", start_time)
 
     # create sql manager and filter out short links
     sql_man = SqlManager()
@@ -113,18 +111,13 @@ def run_hist_calc(cp: dict):
     # run the calculation
     calculation.run()
 
-    start_time = datetime.now()
-    output_delta = timedelta(minutes=cp["time"]["output_step"])
-    since_time = start_time - output_delta
-
     # create the writer object and write the results to disk
     writer = Writer(
         sql_man=sql_man,
         influx_man=influx_man,
-        write_historic=cp["historic"]["write_historic"],
+        write_historic=True,
         skip_influx=cp["historic"]["skip_influx"],
-        skip_sql=cp["historic"]["skip_sql"],
-        since_time=since_time,
+        skip_sql=True,
         cp=cp,
         config=config,
     )
@@ -144,13 +137,17 @@ if __name__ == "__main__":
         "time": {
             "step": 10,
             "output_step": 10,
-            "start": datetime(2025, 3, 19, 3, 30, tzinfo=timezone.utc),
-            "end": datetime(2025, 3, 19, 20, 30, tzinfo=timezone.utc),
+            "start": datetime(2023, 10, 20, 3, 30, tzinfo=timezone.utc),
+            "end": datetime(2023, 10, 20, 20, 30, tzinfo=timezone.utc),
         },
         # CML filtering
         "cml": {
             "min_length": 0.5,
             "max_length": 100,
+        },
+        # db settings for historic calculation
+        "historic": {
+            "skip_influx": False,
         },
         # user info for folder names and link selection (list of IDs)
         "user_info": {

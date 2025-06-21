@@ -2,7 +2,7 @@
 url=http://localhost:8086
 org=
 token=
-timeout=1000
+timeout=10000
 verify_ssl=False
 bucket_out_cml=
 
@@ -11,7 +11,7 @@ address=127.0.0.1
 port=3308
 user=
 pass=
-timeout=1000
+timeout=10000
 db_metadata=cml_metadata
 db_output=telcorain_output
 
