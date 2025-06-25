@@ -11,6 +11,7 @@ from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.exceptions import RaincalcException
 from telcorain.procedures.rain import temperature_compensation, temperature_correlation
 from telcorain.procedures.utils.external_filter import determine_wet
+from telcorain.procedures.utils.helpers import measure_time
 
 # import lib.pycomlink.pycomlink.processing as pycmlp
 # from lib.pycomlink.pycomlink.processing.wet_dry import cnn
@@ -20,7 +21,14 @@ from telcorain.procedures.wet_dry import cnn
 from telcorain.procedures.wet_dry.cnn import (
     CNN_OUTPUT_LEFT_NANS_LENGTH,
 )  # CNN_OUTPUT_LEFT_NANS_LENGTH = 327
-from telcorain.procedures.utils.helpers import measure_time
+
+from telcorain.procedures.wet_dry import preprocess_utility
+
+# from telcorain.procedures.wet_dry import cnn_utility
+from telcorain.procedures.wet_dry.cnn_utility import (
+    cnn_infer_only,
+    attach_cnn_output_to_xarray,
+)
 
 
 @measure_time
@@ -74,7 +82,7 @@ def get_rain_rates(
             """
 
             if cp["temp"]["is_temp_filtered"]:
-                logger.info("[%s] Remove-link procedure started.", log_run_id)
+                logger.debug("[%s] Remove-link procedure started.", log_run_id)
                 temperature_correlation.pearson_correlation(
                     count=count,
                     ips=ips,
@@ -85,7 +93,7 @@ def get_rain_rates(
                 )
 
             if cp["temp"]["is_temp_compensated"]:
-                logger.info(
+                logger.debug(
                     "[%s] Compensation algorithm procedure started.", log_run_id
                 )
                 temperature_compensation.compensation(
@@ -107,26 +115,63 @@ def get_rain_rates(
             calc_data.remove(link)
 
         # process each link -> get intensity R value for each link:
-        logger.info("[%s] Computing rain values...", log_run_id)
+        logger.debug("[%s] Computing rain values...", log_run_id)
         current_link = 0
 
-        for link in calc_data:
-            if cp["wet_dry"]["is_mlp_enabled"]:
-                # determine wet periods using CNN
-                link["wet"] = (("time",), np.zeros([link.time.size]))
+        if cp["wet_dry"]["is_mlp_enabled"]:
+            if cp["wet_dry"]["cnn_model"] == "polz":
+                for link in calc_data:
+                    # determine wet periods using CNN
+                    link["wet"] = (("time",), np.zeros([link.time.size]))
 
-                cnn_out = cnn.cnn_wet_dry(
-                    trsl_channel_1=link.isel(channel_id=0).trsl.values,
-                    trsl_channel_2=link.isel(channel_id=1).trsl.values,
-                    threshold=0.82,
-                    batch_size=128,
-                )
+                    cnn_out = cnn.cnn_wet_dry(
+                        trsl_channel_1=link.isel(channel_id=0).trsl.values,
+                        trsl_channel_2=link.isel(channel_id=1).trsl.values,
+                        threshold=0.82,
+                        batch_size=128,
+                    )
 
-                link["wet"] = (
-                    ("time",),
-                    np.where(np.isnan(cnn_out), link["wet"], cnn_out),
-                )
+                    link["wet"] = (
+                        ("time",),
+                        np.where(np.isnan(cnn_out), link["wet"], cnn_out),
+                    )
+                # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
+                calc_data = [
+                    link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None))
+                    for link in calc_data
+                ]
             else:
+                for i, link in enumerate(calc_data):
+                    preprocessed_df = preprocess_utility.cml_preprocess(
+                        cml=link,
+                        interp_max_gap=10,
+                        suppress_step=True,
+                        conv_threshold=250.0,
+                        std_method=True,
+                        window_size=10,
+                        std_threshold=5.0,
+                        z_method=True,
+                        z_threshold=10.0,
+                        reset_detect=False,
+                        subtract_median=True,
+                    )
+
+                    cnn_out = cnn_infer_only(
+                        preprocessed_df=preprocessed_df,
+                        # param_dir="cnn_polz_ds_cz_param_2025-05-13_17;19",
+                        # param_dir="cnn_v22_ds_cz_param_2025-05-15_22;01",
+                        param_dir=cp["wet_dry"]["cnn_model_name"],
+                        sample_size=60,
+                    )
+
+                    link = attach_cnn_output_to_xarray(
+                        link, cnn_out, sample_size=60, threshold=0.5
+                    )
+                    calc_data[i] = link
+
+                logger.info(f"[{log_run_id}] Rain rates using custom CNN finished.")
+        else:
+            for link in calc_data:
                 # determine wet periods using rolling standard deviation
                 link["wet"] = (
                     link.trsl.rolling(
@@ -135,13 +180,6 @@ def get_rain_rates(
                     ).std(skipna=False)
                     > cp["wet_dry"]["wet_dry_deviation"]
                 )
-
-        if cp["wet_dry"]["is_mlp_enabled"]:
-            # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
-            calc_data = [
-                link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None))
-                for link in calc_data
-            ]
 
         if cp["raingrids"]["is_external_filter_enabled"]:
             for link in calc_data:

@@ -356,7 +356,6 @@ def convert_to_link_datasets(
 
     try:
         calc_data = []
-        link_count = len(selected_links)
         current_link = 0
 
         for link in selected_links:

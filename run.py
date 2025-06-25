@@ -34,6 +34,8 @@ def run_hist_calc(cp: dict):
             "realtime": {
                 "is_realtime": False,
                 "realtime_timewindow": "7d",
+                "retention_window": "1d",
+                "first_iteration_full": False,
                 "realtime_optimization": False,
                 "is_output_write": True,
                 "is_history_write": False,
@@ -42,7 +44,9 @@ def run_hist_calc(cp: dict):
                 "is_sql_write_skipped": False,
             },
             "wet_dry": {
-                "is_mlp_enabled": False,
+                "is_mlp_enabled": True,
+                "cnn_model": "ours",
+                "cnn_model_name": "cnn_v22_ds_cz_param_2025-05-15_22;01",
                 "rolling_hours": 1.0,
                 "rolling_values": 10,
                 "wet_dry_deviation": 0.8,
