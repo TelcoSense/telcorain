@@ -4,7 +4,11 @@ from typing import Any
 import numpy as np
 from pycomlink.processing.baseline import baseline_constant
 from pycomlink.processing.k_R_relation import calc_R_from_A
-from pycomlink.processing.wet_antenna import waa_schleiss_2013
+from pycomlink.processing.wet_antenna import (
+    waa_schleiss_2013,
+    waa_leijnse_2008_from_A_obs,
+    waa_pastorek_2021_from_A_obs,
+)
 from xarray import Dataset
 
 from telcorain.handlers.logging_handler import logger
@@ -24,7 +28,6 @@ from telcorain.procedures.wet_dry.cnn import (
 
 from telcorain.procedures.wet_dry import preprocess_utility
 
-# from telcorain.procedures.wet_dry import cnn_utility
 from telcorain.procedures.wet_dry.cnn_utility import (
     cnn_infer_only,
     attach_cnn_output_to_xarray,
@@ -226,18 +229,45 @@ def get_rain_rates(
                 n_average_last_dry=cp["wet_dry"]["baseline_samples"],
             )
 
-            # calculate wet antenna attenuation
-            link["waa"] = waa_schleiss_2013(
-                rsl=link.trsl,
-                baseline=link.baseline,
-                wet=link.wet,
-                waa_max=cp["waa"]["waa_schleiss_val"],
-                delta_t=60 / ((60 / cp["time"]["step"]) * 60),
-                tau=cp["waa"]["waa_schleiss_tau"],
-            )
+            link["A_rain"] = link.trsl - link.baseline
+            link["A_rain"].values[link.A_rain < 0] = 0
+
+            if cp["waa"]["waa_method"] == "schleiss":
+                # Schleiss WAA estimation
+                link["waa"] = waa_schleiss_2013(
+                    rsl=link.trsl,
+                    baseline=link.baseline,
+                    wet=link.wet,
+                    waa_max=cp["waa"]["waa_schleiss_val"],
+                    delta_t=60 / ((60 / cp["time"]["step"]) * 60),
+                    tau=cp["waa"]["waa_schleiss_tau"],
+                )
+            elif cp["waa"]["waa_method"] == "leijnse":
+                # Leijnse WAA estimation
+                link["waa"] = waa_leijnse_2008_from_A_obs(
+                    A_obs=link.A_rain,
+                    f_Hz=link.frequency * 1e9,
+                    pol=link.polarization,
+                    L_km=float(link.length),
+                )
+
+            elif cp["waa"]["waa_method"] == "pastorek":
+                # Pastorek WAA estimation
+                link["waa"] = waa_pastorek_2021_from_A_obs(
+                    A_obs=link.A_rain,
+                    f_Hz=link.frequency * 1e9,
+                    pol=link.polarization,
+                    L_km=float(link.length),
+                    A_max=2.2,
+                )
+            else:
+                link["waa"] = link["A"]
+                link["waa"] = link["waa"].where(link["waa"] >= 0, 0)
 
             # calculate final rain attenuation
-            link["A"] = link.trsl - link.baseline - link.waa
+            # link["A"] = link.trsl - link.baseline - link.waa # puvodni telcorain
+            link["A"] = link.A_rain - link["waa"]
+            link["A"] = link["A"].where(link["A"] >= 0, 0)
 
             # calculate rain intensity
             link["R"] = calc_R_from_A(
