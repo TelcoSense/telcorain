@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
-from telcorain.handlers.logging_handler import setup_init_logging, logger
+from telcorain.handlers.logging_handler import logger, setup_init_logging
 from telcorain.handlers.writer import Writer
 from telcorain.procedures.calculation import CalculationHistoric
 from telcorain.procedures.utils.helpers import create_cp_dict, select_all_links
@@ -54,6 +54,7 @@ def run_hist_calc(cp: dict):
                 "baseline_samples": 5,
             },
             "waa": {
+                "waa_method": "pastorek",
                 "waa_schleiss_val": 2.3,
                 "waa_schleiss_tau": 15.0,
             },
@@ -81,7 +82,7 @@ def run_hist_calc(cp: dict):
                 "y_max": 51.0557,
             },
             "rendering": {
-                "is_crop_enabled": True,
+                "is_crop_enabled": False,
                 "geojson_file": "czechia.json",
                 "map": "plain_czechia.png",
             },
@@ -151,12 +152,12 @@ if __name__ == "__main__":
         },
         # db settings for historic calculation
         "historic": {
-            "skip_influx": False,
+            "skip_influx": True,
         },
         # user info for folder names and link selection (list of IDs)
         "user_info": {
             "folder_name": "kraken",
-            "links_id": [i for i in range(1, 1000)],
+            "links_id": [i for i in range(1, 100)],
         },
     }
 

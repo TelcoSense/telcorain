@@ -20,6 +20,50 @@ from telcorain.handlers import config_handler
 from telcorain.handlers.logging_handler import logger
 from telcorain.procedures.utils.helpers import dt64_to_unixtime
 
+# thresholds (mm/h)
+_RAIN_THRESHOLDS = np.array(
+    [
+        0.0,
+        0.1,
+        0.115307,
+        0.205048,
+        0.364633,
+        0.648420,
+        1.153072,
+        2.050483,
+        3.646332,
+        6.484198,
+        11.53072,
+        20.50483,
+        36.46332,
+        64.84198,
+        115.3072,
+    ],
+    dtype=np.float32,
+)
+
+# corresponding RGBA colors
+_RAIN_COLORS = np.array(
+    [
+        (0, 0, 0, 0),
+        (57, 0, 112, 255),
+        (47, 1, 169, 255),
+        (0, 0, 252, 255),
+        (0, 108, 192, 255),
+        (0, 160, 0, 255),
+        (0, 188, 0, 255),
+        (52, 216, 0, 255),
+        (156, 220, 0, 255),
+        (224, 220, 0, 255),
+        (252, 176, 0, 255),
+        (252, 132, 0, 255),
+        (252, 88, 0, 255),
+        (252, 0, 0, 255),
+        (160, 0, 0, 255),
+    ],
+    dtype=np.uint8,
+)
+
 
 class RealtimeWriter:
     """
@@ -419,9 +463,9 @@ class Writer:
                 logger.debug(
                     "[WRITE] Saving raingrid %s as raw numpy file...", formatted_time
                 )
-                save_ndarray_to_file(
-                    rain_grid, f"{self.outputs_raw_dir}/{file_name}.npy"
-                )
+                # save_ndarray_to_file(
+                #     rain_grid, f"{self.outputs_raw_dir}/{file_name}.npy"
+                # )
 
                 logger.debug("[WRITE] Raingrid %s successfully saved.", formatted_time)
 
@@ -597,86 +641,39 @@ def mask_grid(
     return data_grid
 
 
-def _get_color(value: float) -> tuple[int, int, int, int]:
+def map_values_to_colors(array: np.ndarray) -> np.ndarray:
     """
-    Get RGBA color tuple based on the rain intensity value.
-    The color scale is identical to the CHMI rain scale colorbar. The rain intensity values are in mm/h, the scale is
-    derived from the CHMI radar scale, where dBZ have been converted to mm/h using the Marshall-Palmer formula:
-    https://rdrr.io/github/potterzot/kgRainPredictR/man/marshall_palmer.html
-
-    [dBZ]  [mm/h]    [RGBA]
-    4      0.064842  (57, 0, 112, 255)
-    8      0.115307  (47, 1, 169, 255)
-    12     0.205048  (0, 0, 252, 255)
-    16     0.364633  (0, 108, 192, 255)
-    20     0.648420  (0, 160, 0, 255)
-    24     1.153072  (0, 188, 0, 255)
-    28     2.050483  (52, 216, 0, 255)
-    32     3.646332  (156, 220, 0, 255)
-    36     6.484198  (224, 220, 0, 255)
-    40     11.53072  (252, 176, 0, 255)
-    44     20.50483  (252, 132, 0, 255)
-    48     36.46332  (252, 88, 0, 255)
-    52     64.84198  (252, 0, 0, 255)
-    56     115.3072  (160, 0, 0, 255)
-
-    :param value: rain intensity value
-    :return: RGBA color tuple, NaN and values below 0.1 are transparent
+    Map a 2D rain intensity array to a 3D (H, W, 4) RGBA color image using vectorized thresholds.
+    NaNs and values < 0.1 become fully transparent.
     """
-    if np.isnan(value) or value < 0.1:
-        return 0, 0, 0, 0  # transparent
-    elif 0.1 <= value < 0.115307:
-        return 57, 0, 112, 255
-    elif 0.115307 <= value < 0.205048:
-        return 47, 1, 169, 255
-    elif 0.205048 <= value < 0.364633:
-        return 0, 0, 252, 255
-    elif 0.364633 <= value < 0.648420:
-        return 0, 108, 192, 255
-    elif 0.648420 <= value < 1.153072:
-        return 0, 160, 0, 255
-    elif 1.153072 <= value < 2.050483:
-        return 0, 188, 0, 255
-    elif 2.050483 <= value < 3.646332:
-        return 52, 216, 0, 255
-    elif 3.646332 <= value < 6.484198:
-        return 156, 220, 0, 255
-    elif 6.484198 <= value < 11.53072:
-        return 224, 220, 0, 255
-    elif 11.53072 <= value < 20.50483:
-        return 252, 176, 0, 255
-    elif 20.50483 <= value < 36.46332:
-        return 252, 132, 0, 255
-    elif 36.46332 <= value < 64.84198:
-        return 252, 88, 0, 255
-    elif 64.84198 <= value < 115.3072:
-        return 252, 0, 0, 255
-    elif value >= 115.3072:
-        return 160, 0, 0, 255
-    else:
-        return 0, 0, 0, 0  # default: transparent
+    flat = array.ravel()
+    rgba = np.zeros((flat.size, 4), dtype=np.uint8)
+    # mask of valid values (not NaN and >= 0.1)
+    valid_mask = (~np.isnan(flat)) & (flat >= 0.1)
+    # get bin index for each valid value
+    # bin_indices = np.searchsorted(_RAIN_THRESHOLDS, flat[valid_mask], side="left")
+    bin_indices = np.searchsorted(_RAIN_THRESHOLDS, flat[valid_mask], side="right") - 1
+    bin_indices = np.clip(bin_indices, 0, len(_RAIN_COLORS) - 1)
+    # assign colors to valid positions
+    rgba[valid_mask] = _RAIN_COLORS[bin_indices]
+    # reshape to (H, W, 4)
+    return rgba.reshape((*array.shape, 4))
 
 
 def ndarray_to_png(array: np.ndarray, output_path: str):
     """
-    Convert 2D numpy array into a PNG image.
+    Convert a 2D rain intensity array to a color-mapped
+    PNG image using the CHMI rain scale.
     :param array: 2D numpy array with rain intensity values
-    :param output_path: path to the output PNG image
+    :param output_path: File path to save the PNG image
     """
-    height, width = array.shape
-    image = Image.new("RGBA", (width, height))
-    pixels = image.load()
-
-    # assign colors to pixels based on the values in the ndarray
-    for i in range(width):
-        for j in range(height):
-            # save pixel at height-j-1 Y position due to vertical flip
-            pixels[i, height - j - 1] = _get_color(array[j, i])
-
     try:
+        rgba_array = map_values_to_colors(array)
+        rgba_array = np.flipud(rgba_array)
+        image = Image.fromarray(rgba_array, mode="RGBA")
         image.save(output_path, "PNG")
     except Exception as error:
-        logger.error("Cannot save PNG image: %s", error)
+        logger.error("Cannot save PNG image '%s': %s", output_path, error)
 
 
 def save_ndarray_to_file(array: np.ndarray, output_path: str):
