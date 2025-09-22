@@ -1,5 +1,7 @@
+import argparse
+import json
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
@@ -43,16 +45,18 @@ def run_hist_calc(cp: dict):
                 "is_influx_write_skipped": False,
                 "is_sql_write_skipped": False,
             },
-            "wet_dry": {
-                "is_mlp_enabled": True,
-                "cnn_model": "ours",
-                "cnn_model_name": "cnn_v22_ds_cz_param_2025-05-15_22;01",
-                "rolling_hours": 1.0,
-                "rolling_values": 10,
-                "wet_dry_deviation": 0.8,
-                "is_window_centered": False,
-                "baseline_samples": 5,
-            },
+            #
+            # "wet_dry": {
+            #     "is_mlp_enabled": True,
+            #     "cnn_model": "ours",
+            #     "cnn_model_name": "cnn_v22_ds_cz_param_2025-05-15_22;01",
+            #     "rolling_hours": 1.0,
+            #     "rolling_values": 10,
+            #     "wet_dry_deviation": 0.8,
+            #     "is_window_centered": False,
+            #     "baseline_samples": 5,
+            # },
+            #
             "waa": {
                 "waa_method": "pastorek",
                 "waa_schleiss_val": 2.3,
@@ -63,29 +67,33 @@ def run_hist_calc(cp: dict):
                 "is_temp_compensated": False,
                 "correlation_threshold": 0.7,
             },
-            "interp": {
-                "interp_res": 0.01,
-                "idw_power": 1,
-                "idw_near": 35,
-                "idw_dist": 1.5,
-            },
+            #
+            # "interp": {
+            #     "interp_res": 0.01,
+            #     "idw_power": 1,
+            #     "idw_near": 35,
+            #     "idw_dist": 1.5,
+            # },
+            #
             "raingrids": {
                 "min_rain_value": 0.1,
                 "is_only_overall": False,
                 "is_output_total": False,
                 "is_external_filter_enabled": False,
             },
-            "limits": {
-                "x_min": 12.0905,
-                "x_max": 18.8591,
-                "y_min": 48.5525,
-                "y_max": 51.0557,
-            },
-            "rendering": {
-                "is_crop_enabled": False,
-                "geojson_file": "czechia.json",
-                "map": "plain_czechia.png",
-            },
+            #
+            # "limits": {
+            #     "x_min": 12.0905,
+            #     "x_max": 18.8591,
+            #     "y_min": 48.5525,
+            #     "y_max": 51.0557,
+            # },
+            #
+            # "rendering": {
+            #     # "is_crop_enabled": False,  #
+            #     # "geojson_file": "czechia.json",
+            #     # "map": "plain_czechia.png",
+            # },
         },
     )
 
@@ -136,29 +144,17 @@ def run_hist_calc(cp: dict):
 
 
 if __name__ == "__main__":
-    # this comes from the web app settings
-    cp = {
-        # time setting (probably dont change step and output_step)
-        "time": {
-            "step": 10,
-            "output_step": 10,
-            "start": datetime(2023, 10, 20, 3, 30, tzinfo=timezone.utc),
-            "end": datetime(2023, 10, 20, 20, 30, tzinfo=timezone.utc),
-        },
-        # CML filtering
-        "cml": {
-            "min_length": 0.5,
-            "max_length": 100,
-        },
-        # db settings for historic calculation
-        "historic": {
-            "skip_influx": True,
-        },
-        # user info for folder names and link selection (list of IDs)
-        "user_info": {
-            "folder_name": "kraken",
-            "links_id": [i for i in range(1, 100)],
-        },
-    }
-
+    parser = argparse.ArgumentParser()
+    # JSON passed from the web app backend
+    parser.add_argument("--config", required=True, help="JSON string with config")
+    args = parser.parse_args()
+    # parse the JSON string into a dict
+    cp = json.loads(args.config)
+    # with open("cp.json", "w") as f:
+    #     json.dump(cp, f, indent=2)
+    # reformat time strings
+    cp["time"]["start"] = datetime.fromisoformat(
+        cp["time"]["start"].replace("Z", "+00:00")
+    )
+    cp["time"]["end"] = datetime.fromisoformat(cp["time"]["end"].replace("Z", "+00:00"))
     run_hist_calc(cp)

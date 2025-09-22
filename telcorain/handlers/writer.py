@@ -383,7 +383,7 @@ class Writer:
         self.is_crop_enabled = self.cp["rendering"]["is_crop_enabled"]
         self.geojson_file = self.cp["rendering"]["geojson_file"]
         self.user_dir = self.cp["user_info"]["folder_name"]
-        self.output_dir = f"outputs_historic/{self.user_dir}_web"
+        self.output_dir = self.cp["user_info"]["output_dir"]
         self.outputs_raw_dir = f"outputs_historic/{self.user_dir}_raw"
 
     def _write_raingrids(
@@ -557,8 +557,8 @@ class Writer:
             )
             return
 
-        if not os.path.exists("outputs_historic"):
-            os.makedirs("outputs_historic")
+        # if not os.path.exists("outputs_historic"):
+        #     os.makedirs("outputs_historic")
 
         # if self.config["setting"]["compensate_historic"]:
         #     desired_start = self.cp["time"]["start"]
@@ -572,10 +572,10 @@ class Writer:
         #     last_record = self.sql_man.get_last_raingrid()
 
         if not os.path.exists(self.output_dir):
-            os.mkdir(self.output_dir)
+            os.makedirs(self.output_dir)
 
-        if not os.path.exists(self.outputs_raw_dir):
-            os.mkdir(self.outputs_raw_dir)
+        # if not os.path.exists(self.outputs_raw_dir):
+        #     os.mkdir(self.outputs_raw_dir)
 
         # I. RAINGRIDS SAVING LOCALLY AND TO MARIADB
         self._write_raingrids(
