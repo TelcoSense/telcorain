@@ -146,10 +146,10 @@ def run_hist_calc(cp: dict):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # JSON passed from the web app backend
-    parser.add_argument("--config", required=True, help="JSON string with config")
+    parser.add_argument("--cp", required=True, help="JSON string with calc params")
     args = parser.parse_args()
     # parse the JSON string into a dict
-    cp = json.loads(args.config)
+    cp = json.loads(args.cp)
     # with open("cp.json", "w") as f:
     #     json.dump(cp, f, indent=2)
     # reformat time strings
