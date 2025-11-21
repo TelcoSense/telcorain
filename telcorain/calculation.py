@@ -1,0 +1,175 @@
+from datetime import datetime
+from typing import Optional
+
+import numpy as np
+import xarray as xr
+
+from telcorain.database.influx_manager import InfluxManager
+from telcorain.handlers import logger
+from telcorain.dataprocessing import convert_to_link_datasets, load_data_from_influxdb
+from telcorain.procedures.exceptions import (
+    ProcessingException,
+    RaincalcException,
+    RainfieldsGenException,
+)
+from telcorain.procedures.rain import rain_calculation
+from telcorain.procedures.rain.rainfields_generation import generate_rainfields
+from telcorain.helpers import measure_time, MwLink
+
+
+class Calculation:
+    """
+    Mode is controlled by:
+        - is_historic (bool)
+        - compensate_historic (bool)
+    """
+
+    def __init__(
+        self,
+        influx_man: InfluxManager,
+        links: dict[int, MwLink],
+        selection: dict[int, int],
+        config: dict,
+        *,
+        is_historic: bool = False,
+        results_id: Optional[int] = None,
+        compensate_historic: bool = False,
+    ):
+        self.influx_man = influx_man
+        self.links = links
+        self.selection = selection
+        self.config = config
+
+        # realtime-specific counters
+        self.realtime_runs = 0
+        self.thousands_runs = 0
+
+        # historic mode settings
+        self.is_historic = is_historic
+        self.results_id = results_id
+        self.compensate_historic = compensate_historic
+
+        # persistent grids/state
+        self.rain_grids: list[np.ndarray] = []
+        self.x_grid = None
+        self.y_grid = None
+        self.calc_data_steps = None
+        self.last_time: np.datetime64 = np.datetime64(datetime.min)
+
+    # =====================================================================
+    # RUN
+    # =====================================================================
+
+    @measure_time
+    def run(self, realtime_timewindow: str = "1d"):
+        """
+        Unified RUN function that behaves either like realtime or historic calculation.
+        """
+
+        # ---------------------------
+        # Select run ID for logging
+        # ---------------------------
+        if self.is_historic:
+            log_run_id = f"Historic run"
+        else:
+            self.realtime_runs += 1
+            log_run_id = f"RUN: {self.realtime_runs}"
+
+        logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
+
+        # =====================================================================
+        # 1. LOAD DATA FROM INFLUX
+        # =====================================================================
+        try:
+            influx_data, missing_links, ips = load_data_from_influxdb(
+                influx_man=self.influx_man,
+                config=self.config,
+                selected_links=self.selection,
+                links=self.links,
+                log_run_id=log_run_id,
+                realtime=not self.is_historic,
+                realtime_timewindow=(
+                    realtime_timewindow if not self.is_historic else None
+                ),
+            )
+
+            calc_data: list[xr.Dataset] = convert_to_link_datasets(
+                selected_links=self.selection,
+                links=self.links,
+                influx_data=influx_data,
+                missing_links=missing_links,
+                log_run_id=log_run_id,
+            )
+            del influx_data
+
+        except ProcessingException:
+            return
+
+        # =====================================================================
+        # 2. COMPUTE RAIN RATES
+        # =====================================================================
+        try:
+            calc_data = rain_calculation.get_rain_rates(
+                calc_data=calc_data,
+                config=self.config,
+                ips=ips,
+                log_run_id=log_run_id,
+            )
+        except RaincalcException:
+            return
+
+        # =====================================================================
+        # 3. RAINFIELDS (Unified)
+        # =====================================================================
+        try:
+            result = generate_rainfields(
+                calc_data=calc_data,
+                config=self.config,
+                rain_grids=self.rain_grids,
+                is_historic=self.is_historic,
+                realtime_runs=self.realtime_runs,
+                last_time=self.last_time,
+                log_run_id=log_run_id,
+            )
+
+            # realtime → returns 6 values
+            if not self.is_historic:
+                (
+                    self.rain_grids,
+                    self.calc_data_steps,
+                    self.x_grid,
+                    self.y_grid,
+                    self.realtime_runs,
+                    self.last_time,
+                ) = result
+
+            # historic → returns 4 values
+            else:
+                (
+                    self.rain_grids,
+                    self.calc_data_steps,
+                    self.x_grid,
+                    self.y_grid,
+                ) = result
+
+        except RainfieldsGenException:
+            return
+
+        logger.info("[%s] Rainfall calculation procedure ended.", log_run_id)
+
+        # =====================================================================
+        # 4. REALTIME housekeeping
+        # =====================================================================
+        if not self.is_historic:
+
+            # refresh full data after 1000 runs
+            self.force_data_refresh = self.realtime_runs % 1000 == 0
+
+            # prevent overflow
+            if self.realtime_runs == 99999:
+                self.realtime_runs = 1
+                self.thousands_runs += 1
+                logger.info(
+                    "Refreshing realtime_runs to 1 after 99999 runs. "
+                    f"No. of thousand runs: {self.thousands_runs}"
+                )

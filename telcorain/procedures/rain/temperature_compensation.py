@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from telcorain.handlers.logging_handler import logger
-from telcorain.procedures.utils.helpers import measure_time
+from telcorain.handlers import logger
+from telcorain.helpers import measure_time
 
 
 @measure_time
@@ -23,17 +23,21 @@ def compensation(count, ips, curr_link, link, spin_correlation):
 
     # Calculation of the Pearson correlation index for side A
     pcctrsl_a = pd.Series(b_trsl_array).corr(pd.Series(b_temptx_array))
-    # logger.debug(
-    #     "Correlation 'A(rx)_B(tx)' for link %d IP: %s %.3f",
-    #     count, ips[curr_link - 1], pcctrsl_a
-    # )
+    logger.debug(
+        "Correlation 'A(rx)_B(tx)' for link %d IP: %s %.3f",
+        count,
+        ips[curr_link - 1],
+        pcctrsl_a,
+    )
 
     # Calculation of the Pearson correlation index for side B
     pcctrsl_b = pd.Series(a_trsl_array).corr(pd.Series(a_temptx_array))
-    # logger.debug(
-    #     "Correlation 'B(rx)_A(tx)' for link %d IP: %s %.3f",
-    #     count, ips[curr_link], pcctrsl_b
-    # )
+    logger.debug(
+        "Correlation 'B(rx)_A(tx)' for link %d IP: %s %.3f",
+        count,
+        ips[curr_link],
+        pcctrsl_b,
+    )
 
     if not (np.isnan(pcctrsl_a) or np.isnan(pcctrsl_b)):
         if ((pcctrsl_a >= spin_correlation) or (pcctrsl_a <= -spin_correlation)) or (

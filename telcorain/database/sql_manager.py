@@ -7,12 +7,9 @@ from typing import Union
 
 import mariadb
 from mariadb import Cursor
-from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
-from telcorain.database.models.mwlink import MwLink
-from telcorain.handlers import config_handler
-from telcorain.handlers.logging_handler import logger
-from telcorain.procedures.utils.helpers import calc_distance
+from telcorain.handlers import config_handler, logger
+from telcorain.helpers import calc_distance, MwLink
 
 
 class SqlManager:
@@ -356,8 +353,6 @@ class SqlManager:
         X_MAX: float,
         Y_MIN: float,
         Y_MAX: float,
-        address: str,
-        port: str,
     ):
         """
         Insert realtime parameters into output database.
@@ -383,10 +378,6 @@ class SqlManager:
                 x = int((X_MAX - X_MIN) / resolution + 1)
                 y = int((Y_MAX - Y_MIN) / resolution + 1)
 
-                if address == "0.0.0.0" or address == "":
-                    address = "localhost"
-                url = f"http://{address}:{port}"
-
                 cursor.execute(
                     query,
                     (
@@ -399,7 +390,7 @@ class SqlManager:
                         Y_MAX,
                         x,
                         y,
-                        url,
+                        "",
                     ),
                 )
                 self.connection.commit()
@@ -574,25 +565,3 @@ class SqlManager:
 
     def __del__(self):
         self.connection.close()
-
-
-class SqlChecker(SqlManager, QRunnable):
-    """
-    Subclass for use in threadpool, for connection testing.
-    Emits 'ping_signal' from 'SqlSignal' class passed as 'signals' parameter.
-    """
-
-    def __init__(self, signals: QObject):
-        super(SqlChecker, self).__init__()
-        self.sig = signals
-
-    def run(self):
-        self.sig.ping_signal.emit(self.check_connection())
-
-
-class SqlSignals(QObject):
-    """
-    Signaling class for SqlManager's threadpool subclasses.
-    """
-
-    ping_signal = pyqtSignal(bool)
