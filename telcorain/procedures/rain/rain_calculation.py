@@ -11,23 +11,14 @@ from pycomlink.processing.wet_antenna import (
 )
 from xarray import Dataset
 
-from telcorain.handlers.logging_handler import logger
+from telcorain.handlers import logger
 from telcorain.procedures.exceptions import RaincalcException
-from telcorain.procedures.rain import temperature_compensation, temperature_correlation
-from telcorain.procedures.utils.external_filter import determine_wet
-from telcorain.procedures.utils.helpers import measure_time
-
-# import lib.pycomlink.pycomlink.processing as pycmlp
-# from lib.pycomlink.pycomlink.processing.wet_dry import cnn
-# from lib.pycomlink.pycomlink.processing.wet_dry.cnn import CNN_OUTPUT_LEFT_NANS_LENGTH
+from telcorain.procedures.rain import temperature_compensation
+from telcorain.helpers import measure_time
 
 from telcorain.procedures.wet_dry import cnn
-from telcorain.procedures.wet_dry.cnn import (
-    CNN_OUTPUT_LEFT_NANS_LENGTH,
-)  # CNN_OUTPUT_LEFT_NANS_LENGTH = 327
-
+from telcorain.procedures.wet_dry.cnn import CNN_OUTPUT_LEFT_NANS_LENGTH
 from telcorain.procedures.wet_dry import preprocess_utility
-
 from telcorain.procedures.wet_dry.cnn_utility import (
     cnn_infer_only,
     attach_cnn_output_to_xarray,
@@ -37,28 +28,40 @@ from telcorain.procedures.wet_dry.cnn_utility import (
 @measure_time
 def get_rain_rates(
     calc_data: list[Dataset],
-    cp: dict[str, Any],
+    config: dict[str, Any],
     ips: list[str],
     log_run_id: str = "default",
 ) -> list[Dataset]:
+    """
+    Compute rain rates for each link dataset in calc_data.
+
+    This version keeps the original xarray-based logic and shape handling:
+    - tsl, rsl, temperature_* are (channel_id, time)
+    - frequency is a coordinate with dim (channel_id)
+    - length and polarization are scalar coordinates
+    """
+
     current_link = 0
 
     try:
-        logger.info("[%s] Smoothing signal data...", log_run_id)
-        # link_count = len(calc_data)
+        logger.debug("[%s] Smoothing signal data...", log_run_id)
         count = 0
 
-        # links stored in this list will be removed from the calculation in case of enabled correlation filtering
-        links_to_delete = []
+        # links stored in this list will be removed from the calculation
+        # in case of enabled correlation filtering
+        links_to_delete: list[Dataset] = []
 
+        # ------------------------------------------------------------------
+        # 1) Pre-processing: smoothing + temperature correlation / compensation
+        # ------------------------------------------------------------------
         for link in calc_data:
-            # TODO: load upper tx power from options (here it's 40 dBm)
+            # Upper Tx power limit (40 dBm) – TODO: move to config if needed
             link["tsl"] = link.tsl.astype(float).where(link.tsl < 40.0)
             link["tsl"] = link.tsl.astype(float).interpolate_na(
                 dim="time", method="nearest", max_gap=None
             )
 
-            # TODO: load bottom rx power from options (here it's -70 dBm)
+            # Bottom Rx power limit (-70 dBm) and removal of zeros
             link["rsl"] = (
                 link.rsl.astype(float).where(link.rsl != 0.0).where(link.rsl > -70.0)
             )
@@ -66,36 +69,35 @@ def get_rain_rates(
                 dim="time", method="nearest", max_gap=None
             )
 
+            # Total attenuation (Tx – Rx)
             link["trsl"] = link.tsl - link.rsl
 
+            # Temperatures – linear interpolation over time
             link["temperature_rx"] = link.temperature_rx.astype(float).interpolate_na(
                 dim="time", method="linear", max_gap=None
             )
-
             link["temperature_tx"] = link.temperature_tx.astype(float).interpolate_na(
                 dim="time", method="linear", max_gap=None
             )
+
             current_link += 1
             count += 1
 
-            """
-            # temperature_correlation  - remove links if the correlation exceeds the specified threshold
-            # temperature_compensation - as correlation, but also replaces the original trsl with the corrected one,
-                                         according to the custom temperature compensation algorithm
-            """
-
-            if cp["temp"]["is_temp_filtered"]:
+            # --------------------------------------------------------------
+            # Temperature-based filtering / compensation
+            # --------------------------------------------------------------
+            if config["temp"]["is_temp_filtered"]:
                 logger.debug("[%s] Remove-link procedure started.", log_run_id)
-                temperature_correlation.pearson_correlation(
+                temperature_compensation.pearson_correlation(
                     count=count,
                     ips=ips,
                     curr_link=current_link,
                     link_todelete=links_to_delete,
                     link=link,
-                    spin_correlation=cp["temp"]["correlation_threshold"],
+                    spin_correlation=config["temp"]["correlation_threshold"],
                 )
 
-            if cp["temp"]["is_temp_compensated"]:
+            if config["temp"]["is_temp_compensated"]:
                 logger.debug(
                     "[%s] Compensation algorithm procedure started.", log_run_id
                 )
@@ -104,27 +106,25 @@ def get_rain_rates(
                     ips=ips,
                     curr_link=current_link,
                     link=link,
-                    spin_correlation=cp["temp"]["correlation_threshold"],
+                    spin_correlation=config["temp"]["correlation_threshold"],
                 )
-
-            """
-            'current_link += 1' serves to accurately list the 'count' and ip address of CML unit
-             when the 'temperature_compensation.py' or 'temperature_correlation.py' is called
-            """
             current_link += 1
 
-        # Run the removal of high correlation links in case of enabled filtering
+        # Remove links flagged for deletion (high temperature correlation)
         for link in links_to_delete:
             calc_data.remove(link)
 
-        # process each link -> get intensity R value for each link:
+        # ------------------------------------------------------------------
+        # 2) Wet / Dry classification
+        # ------------------------------------------------------------------
         logger.debug("[%s] Computing rain values...", log_run_id)
         current_link = 0
 
-        if cp["wet_dry"]["is_mlp_enabled"]:
-            if cp["wet_dry"]["cnn_model"] == "polz":
+        if config["wet_dry"]["is_mlp_enabled"]:
+            # CNN-based wet/dry classification
+            if config["wet_dry"]["cnn_model"] == "polz":
                 for link in calc_data:
-                    # determine wet periods using CNN
+                    # initialize wet flag
                     link["wet"] = (("time",), np.zeros([link.time.size]))
 
                     cnn_out = cnn.cnn_wet_dry(
@@ -138,7 +138,8 @@ def get_rain_rates(
                         ("time",),
                         np.where(np.isnan(cnn_out), link["wet"], cnn_out),
                     )
-                # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values from dataset since they are NaNs
+
+                # remove first CNN_OUTPUT_LEFT_NANS_LENGTH time values
                 calc_data = [
                     link.isel(time=slice(CNN_OUTPUT_LEFT_NANS_LENGTH, None))
                     for link in calc_data
@@ -161,9 +162,7 @@ def get_rain_rates(
 
                     cnn_out = cnn_infer_only(
                         preprocessed_df=preprocessed_df,
-                        # param_dir="cnn_polz_ds_cz_param_2025-05-13_17;19",
-                        # param_dir="cnn_v22_ds_cz_param_2025-05-15_22;01",
-                        param_dir=cp["wet_dry"]["cnn_model_name"],
+                        param_dir=config["wet_dry"]["cnn_model_name"],
                         sample_size=60,
                     )
 
@@ -174,85 +173,54 @@ def get_rain_rates(
 
                 logger.info(f"[{log_run_id}] Rain rates using custom CNN finished.")
         else:
+            # Rolling-STD–based wet/dry detection (xarray rolling)
             for link in calc_data:
-                # determine wet periods using rolling standard deviation
                 link["wet"] = (
                     link.trsl.rolling(
-                        time=cp["wet_dry"]["rolling_values"],
-                        center=cp["wet_dry"]["is_window_centered"],
+                        time=config["wet_dry"]["rolling_values"],
+                        center=config["wet_dry"]["is_window_centered"],
                     ).std(skipna=False)
-                    > cp["wet_dry"]["wet_dry_deviation"]
+                    > config["wet_dry"]["wet_dry_deviation"]
                 )
 
-        if cp["raingrids"]["is_external_filter_enabled"]:
-            for link in calc_data:
-                # central points of the links are sent into external filter
-                link["lat_center"] = (link.site_a_latitude + link.site_b_latitude) / 2
-                link["lon_center"] = (link.site_a_longitude + link.site_b_longitude) / 2
-
-                for t in range(len(link.time)):
-                    time = link.time[t].values
-                    external_wet = determine_wet(
-                        time,
-                        link.lon_center,
-                        link.lat_center,
-                        cp["external_filter"]["radius"] + link.length / 2,
-                        cp["external_filter"]["pixel_threshold"],
-                        cp["external_filter"]["IMG_X_MIN"],
-                        cp["external_filter"]["IMG_X_MAX"],
-                        cp["external_filter"]["IMG_Y_MIN"],
-                        cp["external_filter"]["IMG_Y_MAX"],
-                        cp["external_filter"]["url"],
-                        cp["external_filter"]["default_return"],
-                        not cp["realtime"]["is_realtime"],
-                    )
-                    internal_wet = link.wet[t].values
-                    link.wet[t] = external_wet and internal_wet
-                    logger.debug(
-                        "[%s] [EXTERNAL FILTER] CML: %d, time: %s, EXWET: %s && INTWET: %s = %s",
-                        log_run_id,
-                        link.cml_id.values,
-                        time,
-                        external_wet,
-                        internal_wet,
-                        link.wet[t].values,
-                    )
-
+        # ------------------------------------------------------------------
+        # 3) Baseline, WAA, final attenuation and rain rate
+        # ------------------------------------------------------------------
         for link in calc_data:
-            # calculate ratio of wet periods
+            # Ratio of wet periods
             link["wet_fraction"] = (link.wet == 1).sum() / len(link.time)
 
-            # determine signal baseline
+            # Baseline attenuation (constant)
             link["baseline"] = baseline_constant(
                 trsl=link.trsl,
                 wet=link.wet,
-                n_average_last_dry=cp["wet_dry"]["baseline_samples"],
+                n_average_last_dry=config["wet_dry"]["baseline_samples"],
             )
 
+            # Rain-only attenuation
             link["A_rain"] = link.trsl - link.baseline
             link["A_rain"].values[link.A_rain < 0] = 0
 
-            if cp["waa"]["waa_method"] == "schleiss":
-                # Schleiss WAA estimation
+            # Wet-antenna attenuation (WAA)
+            if config["waa"]["waa_method"] == "schleiss":
+                # NOTE: this matches the original delta_t expression
+                delta_t = 60 / ((60 / config["time"]["step"]) * 60)
                 link["waa"] = waa_schleiss_2013(
                     rsl=link.trsl,
                     baseline=link.baseline,
                     wet=link.wet,
-                    waa_max=cp["waa"]["waa_schleiss_val"],
-                    delta_t=60 / ((60 / cp["time"]["step"]) * 60),
-                    tau=cp["waa"]["waa_schleiss_tau"],
+                    waa_max=config["waa"]["waa_schleiss_val"],
+                    delta_t=delta_t,
+                    tau=config["waa"]["waa_schleiss_tau"],
                 )
-            elif cp["waa"]["waa_method"] == "leijnse":
-                # Leijnse WAA estimation
+            elif config["waa"]["waa_method"] == "leijnse":
                 link["waa"] = waa_leijnse_2008_from_A_obs(
                     A_obs=link.A_rain,
                     f_Hz=link.frequency * 1e9,
                     pol=link.polarization,
                     L_km=float(link.length),
                 )
-
-            elif cp["waa"]["waa_method"] == "pastorek":
-                # Pastorek WAA estimation
+            elif config["waa"]["waa_method"] == "pastorek":
                 link["waa"] = waa_pastorek_2021_from_A_obs(
                     A_obs=link.A_rain,
                     f_Hz=link.frequency * 1e9,
@@ -261,26 +229,31 @@ def get_rain_rates(
                     A_max=2.2,
                 )
             else:
+                # fallback: clamp A (kept from original code)
                 link["waa"] = link["A"]
                 link["waa"] = link["waa"].where(link["waa"] >= 0, 0)
 
-            # calculate final rain attenuation
-            # link["A"] = link.trsl - link.baseline - link.waa # puvodni telcorain
+            # Final rain attenuation
             link["A"] = link.A_rain - link["waa"]
             link["A"] = link["A"].where(link["A"] >= 0, 0)
 
-            # calculate rain intensity
+            # Rain intensity (mm/h)
             link["R"] = calc_R_from_A(
                 A=link.A,
                 L_km=float(link.length),
-                f_GHz=link.frequency,
-                pol=link.polarization,
+                f_GHz=link.frequency,  # IMPORTANT: pass DataArray, not float(...)
+                pol=link.polarization,  # keep as in original
             )
 
             current_link += 1
+
         return calc_data
 
     except BaseException as error:
+        # Be defensive if current_link points past the list
+        bad_link = None
+        if 0 <= current_link < len(calc_data):
+            bad_link = calc_data[current_link]
 
         logger.error(
             "[%s] An unexpected error occurred during rain calculation: %s %s.\n"
@@ -289,9 +262,8 @@ def get_rain_rates(
             log_run_id,
             type(error),
             error,
-            calc_data[current_link],
+            bad_link,
         )
 
         traceback.print_exc()
-
         raise RaincalcException("Error occurred during rainfall calculation processing")
