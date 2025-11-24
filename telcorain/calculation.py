@@ -6,7 +6,10 @@ import xarray as xr
 
 from telcorain.database.influx_manager import InfluxManager
 from telcorain.handlers import logger
-from telcorain.dataprocessing import convert_to_link_datasets, load_data_from_influxdb
+from telcorain.dataprocessing import (
+    convert_to_link_datasets,
+    load_data_from_influxdb,
+)
 from telcorain.procedures.exceptions import (
     ProcessingException,
     RaincalcException,
@@ -19,6 +22,8 @@ from telcorain.helpers import measure_time, MwLink
 
 class Calculation:
     """
+    Unified Calculation (realtime / historic).
+
     Mode is controlled by:
         - is_historic (bool)
         - compensate_historic (bool)
@@ -51,9 +56,9 @@ class Calculation:
 
         # persistent grids/state
         self.rain_grids: list[np.ndarray] = []
-        self.x_grid = None
-        self.y_grid = None
-        self.calc_data_steps = None
+        self.x_grid: Optional[np.ndarray] = None
+        self.y_grid: Optional[np.ndarray] = None
+        self.calc_data_steps: Optional[xr.Dataset] = None
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
 
     # =====================================================================
@@ -70,7 +75,7 @@ class Calculation:
         # Select run ID for logging
         # ---------------------------
         if self.is_historic:
-            log_run_id = f"Historic run"
+            log_run_id = "Historic run"
         else:
             self.realtime_runs += 1
             log_run_id = f"RUN: {self.realtime_runs}"
@@ -78,10 +83,10 @@ class Calculation:
         logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
 
         # =====================================================================
-        # 1. LOAD DATA FROM INFLUX
+        # 1. LOAD DATA FROM INFLUX (pandas-first)
         # =====================================================================
         try:
-            influx_data, missing_links, ips = load_data_from_influxdb(
+            df, missing_links, ips = load_data_from_influxdb(
                 influx_man=self.influx_man,
                 config=self.config,
                 selected_links=self.selection,
@@ -89,18 +94,18 @@ class Calculation:
                 log_run_id=log_run_id,
                 realtime=not self.is_historic,
                 realtime_timewindow=(
-                    realtime_timewindow if not self.is_historic else None
+                    realtime_timewindow if not self.is_historic else "1d"
                 ),
             )
 
             calc_data: list[xr.Dataset] = convert_to_link_datasets(
                 selected_links=self.selection,
                 links=self.links,
-                influx_data=influx_data,
+                df=df,
                 missing_links=missing_links,
                 log_run_id=log_run_id,
             )
-            del influx_data
+            del df
 
         except ProcessingException:
             return
@@ -132,7 +137,6 @@ class Calculation:
                 log_run_id=log_run_id,
             )
 
-            # realtime → returns 6 values
             if not self.is_historic:
                 (
                     self.rain_grids,
@@ -142,8 +146,6 @@ class Calculation:
                     self.realtime_runs,
                     self.last_time,
                 ) = result
-
-            # historic → returns 4 values
             else:
                 (
                     self.rain_grids,
@@ -161,7 +163,6 @@ class Calculation:
         # 4. REALTIME housekeeping
         # =====================================================================
         if not self.is_historic:
-
             # refresh full data after 1000 runs
             self.force_data_refresh = self.realtime_runs % 1000 == 0
 

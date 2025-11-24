@@ -20,22 +20,17 @@ from telcorain.handlers import logger
 
 
 class Writer:
-
     def __init__(
         self,
-        sql_man,
         influx_man,
         skip_influx: bool,
-        skip_sql: bool,
         config: dict,
         since_time: Optional[datetime] = None,
         is_historic: bool = False,
         influx_wipe_thread: Optional[Thread] = None,
     ):
-        self.sql_man = sql_man
         self.influx_man = influx_man
         self.skip_influx = skip_influx
-        self.skip_sql = skip_sql
         self.config = config
         self.is_historic = is_historic
         self.influx_wipe_thread = influx_wipe_thread
@@ -82,7 +77,6 @@ class Writer:
         Precompute polygon boolean mask once.
         Extremely fast during writing.
         """
-
         minx, miny, maxx, maxy = self.bbox
 
         bbox_mask = (
@@ -111,23 +105,12 @@ class Writer:
         y_grid: np.ndarray,
         calc_dataset: Dataset,
     ):
-
-        # ------------------------------------------------------
         # Prepare polygon and static mask ONCE
-        # ------------------------------------------------------
         if self.is_crop_enabled and self.static_mask is None:
-            logger.debug("[WRITE] Building static polygon mask...")
-
             self.prep_poly, self.bbox = self._load_polygon()
             self.static_mask = self._compute_static_mask(x_grid, y_grid)
 
-            logger.debug(
-                "[WRITE] Static mask computed: %s pixels inside polygon",
-                np.sum(self.static_mask),
-            )
-
         for t in range(len(calc_dataset.time)):
-
             # ---------- timestamps ----------
             time_val = calc_dataset.time[t]
             raingrid_time = datetime.utcfromtimestamp(dt64_to_unixtime(time_val.values))
@@ -154,21 +137,6 @@ class Writer:
 
             # ---------- RAW ----------
             if need_raw:
-                if not self.skip_sql:
-                    links = calc_dataset.isel(time=t).cml_id.values.tolist()
-                    r_median = np.nanmedian(grid)
-                    r_avg = np.nanmean(grid)
-                    r_max = np.nanmax(grid)
-
-                    self.sql_man.insert_raingrid(
-                        time=raingrid_time,
-                        links=links,
-                        file_name=f"{file_name}.png",
-                        r_median=r_median,
-                        r_avg=r_avg,
-                        r_max=r_max,
-                    )
-
                 save_ndarray_to_file(grid, raw_path)
 
             # ---------- PNG ----------
@@ -180,15 +148,17 @@ class Writer:
         logger.info("[WRITE] Saving raingrids locally -- DONE.")
 
     # ------------------------------------------------------------------
-    # TIMESERIES
+    # TIMESERIES → InfluxDB
     # ------------------------------------------------------------------
 
-    def _write_timeseries_realtime(self, calc_dataset, np_last_time, np_since_time):
-
-        compare_time = np_since_time if np_since_time > np_last_time else np_last_time
+    def _write_timeseries_realtime(self, calc_dataset: Dataset, np_since_time):
+        """
+        Realtime: write rain_intensity to InfluxDB for all timestamps > since_time.
+        No MariaDB / last-raingrid logic anymore.
+        """
         logger.debug("[WRITE: InfluxDB] Preparing realtime rain timeseries...")
 
-        filtered = calc_dataset.where(calc_dataset.time > compare_time).dropna(
+        filtered = calc_dataset.where(calc_dataset.time > np_since_time).dropna(
             dim="time", how="all"
         )
 
@@ -199,18 +169,16 @@ class Writer:
 
         if cmls_count > 0 and times_count > 0:
             for cml in range(cmls_count):
+                cml_slice = filtered.isel(cml_id=cml)
+                cml_id = int(cml_slice.cml_id)
+                # precompute mean over channels for speed
+                r_mean = cml_slice.R.mean(dim="channel_id").values  # shape (time,)
+
                 for t in range(times_count):
                     points_to_write.append(
                         Point("telcorain")
-                        .tag("cml_id", int(filtered.isel(cml_id=cml).cml_id))
-                        .field(
-                            "rain_intensity",
-                            float(
-                                filtered.isel(cml_id=cml)
-                                .R.mean(dim="channel_id")
-                                .isel(time=t)
-                            ),
-                        )
+                        .tag("cml_id", cml_id)
+                        .field("rain_intensity", float(r_mean[t]))
                         .time(
                             dt64_to_unixtime(filtered.isel(time=t).time.values),
                             write_precision=WritePrecision.S,
@@ -219,24 +187,27 @@ class Writer:
 
         self.influx_man.write_points(points_to_write, self.influx_man.BUCKET_OUT_CML)
 
-    def _write_timeseries_historic(self, calc_dataset):
-
+    def _write_timeseries_historic(self, calc_dataset: Dataset):
+        """
+        Historic: write all rain_intensity timeseries to InfluxDB.
+        Still no MariaDB writes.
+        """
         logger.info("[WRITE: InfluxDB] Preparing historic rain timeseries...")
         points_to_write = []
 
-        for cml in range(calc_dataset.cml_id.size):
-            for t in range(calc_dataset.time.size):
+        cmls_count = calc_dataset.cml_id.size
+        times_count = calc_dataset.time.size
+
+        for cml in range(cmls_count):
+            cml_slice = calc_dataset.isel(cml_id=cml)
+            cml_id = int(cml_slice.cml_id)
+            r_mean = cml_slice.R.mean(dim="channel_id").values  # shape (time,)
+
+            for t in range(times_count):
                 points_to_write.append(
                     Point("telcorain")
-                    .tag("cml_id", int(calc_dataset.isel(cml_id=cml).cml_id))
-                    .field(
-                        "rain_intensity",
-                        float(
-                            calc_dataset.isel(cml_id=cml)
-                            .R.mean(dim="channel_id")
-                            .isel(time=t)
-                        ),
-                    )
+                    .tag("cml_id", cml_id)
+                    .field("rain_intensity", float(r_mean[t]))
                     .time(
                         dt64_to_unixtime(calc_dataset.isel(time=t).time.values),
                         write_precision=WritePrecision.S,
@@ -263,7 +234,7 @@ class Writer:
             self.influx_man.is_manager_locked = False
             return
 
-        # Historic compensation
+        # Historic compensation (unchanged)
         if self.is_historic and self.config.get("historic", {}).get(
             "compensate_historic", False
         ):
@@ -279,20 +250,15 @@ class Writer:
         if self.config["directories"]["save_raw"]:
             os.makedirs(self.outputs_raw_dir, exist_ok=True)
 
-        # I. raingrids
+        # I. raingrids → filesystem
         self._write_raingrids(rain_grids, x_grid, y_grid, calc_dataset)
 
-        # II. timeseries
+        # II. timeseries → InfluxDB only
         if not self.skip_influx:
             if self.is_historic:
                 self._write_timeseries_historic(calc_dataset)
             else:
-                last_record = self.sql_man.get_last_raingrid()
-                last_time = list(last_record.keys())[0] if last_record else datetime.min
-                np_last_time = np.datetime64(last_time)
                 np_since_time = np.datetime64(self.since_time)
-                self._write_timeseries_realtime(
-                    calc_dataset, np_last_time, np_since_time
-                )
+                self._write_timeseries_realtime(calc_dataset, np_since_time)
 
         self.influx_man.is_manager_locked = False

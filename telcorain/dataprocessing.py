@@ -1,9 +1,9 @@
 import traceback
-from os.path import exists
 from datetime import datetime
+from typing import Optional, Dict, List, Tuple
+
 import numpy as np
-from enum import Enum
-from typing import Optional, Union
+import pandas as pd
 import xarray as xr
 
 from telcorain.database.influx_manager import InfluxManager
@@ -12,270 +12,106 @@ from telcorain.procedures.exceptions import ProcessingException
 from telcorain.helpers import measure_time, MwLink
 
 
-@measure_time
-def convert_to_link_datasets(
-    selected_links: dict[int, int],
-    links: dict[int, MwLink],
-    influx_data: dict[str, Union[dict[str, dict[datetime, float]], str]],
-    missing_links: list[int],
-    log_run_id: str = "default",
-) -> list[xr.Dataset]:
+def get_ips_from_links_dict(
+    selected_links: Dict[int, int],
+    links: Dict[int, MwLink],
+) -> List[str]:
     """
-    Merge raw influx data with link metadata and convert them into a list of xarray datasets, each representing a link.
+    Build a list of IP addresses from the selected links.
+
+    selected_links: dict[link_id] -> any truthy value = enabled, falsy = disabled.
+    links:          dict[link_id] -> MwLink
     """
-    link = 0
-
-    try:
-        calc_data = []
-        current_link = 0
-
-        for link in selected_links:
-            if selected_links[link] == 0:
-                continue
-
-            tx_zeros_b = False
-            tx_zeros_a = False
-
-            is_a_in = links[link].ip_a in influx_data
-            is_b_in = links[link].ip_b in influx_data
-
-            # TODO: load from options list of constant Tx power devices
-            is_constant_tx_power = links[link].tech in ("1s10", "summit", "summit_bt")
-            # TODO: load from options list of bugged techs with missing Tx zeros in InfluxDB
-            is_tx_power_bugged = links[link].tech in ("ceragon_ip_10",)
-
-            # skip links, where data of one unit (or both) are not available
-            # but constant Tx power devices are exceptions
-            if not (is_a_in and is_b_in):
-                if not ((is_a_in != is_b_in) and is_constant_tx_power):
-                    if link not in missing_links:
-                        logger.debug(
-                            "[%s] Skipping link ID: %d. No unit data available.",
-                            log_run_id,
-                            link,
-                        )
-                    # skip link
-                    continue
-
-            # skip links with missing Tx power data on the one of the units (unable to do Tx power correction)
-            # Orcaves 1S10 and IP10Gs have constant Tx power, so it doesn't matter
-            if is_constant_tx_power:
-                tx_zeros_b = True
-                tx_zeros_a = True
-            elif ("tx_power" not in influx_data[links[link].ip_a]) or (
-                "tx_power" not in influx_data[links[link].ip_b]
-            ):
-                # sadly, some devices of certain techs are badly exported from original source, and they are
-                # missing Tx zero values in InfluxDB, so this hack needs to be done
-                # (for other techs, there is no certainty, if original Tx value was zero in fact, or it's a NMS
-                # error and these values are missing, so it's better to skip that links)
-                if is_tx_power_bugged:
-                    logger.debug(
-                        '[%s] Link ID: %d. No Tx Power data available. Link technology "%s" is on'
-                        " exception list -> filling Tx data with zeros.",
-                        log_run_id,
-                        link,
-                        links[link].tech,
-                    )
-                    if "tx_power" not in influx_data[links[link].ip_b]:
-                        tx_zeros_b = True
-                    if "tx_power" not in influx_data[links[link].ip_a]:
-                        tx_zeros_a = True
-                else:
-                    logger.debug(
-                        "[%s] Skipping link ID: %d. No Tx Power data available.",
-                        log_run_id,
-                        link,
-                    )
-                    # skip link
-                    continue
-
-            # hack: since one dimensional freq var in xarray is crashing pycomlink, change one freq negligibly to
-            # preserve an array of two frequencies (channel A, channel B)
-            if links[link].freq_a == links[link].freq_b:
-                links[link].freq_a += 1
-
-            link_channels = []
-
-            # Side/unit A (channel B to A)
-            unit_a_channels = _sort_into_channels(
-                influx_data=influx_data,
-                links=links,
-                link_id=link,
-                link_channel_selector=selected_links[link],
-                tx_ip=links[link].ip_b,
-                rx_ip=links[link].ip_a,
-                tx_tx_zeros=tx_zeros_b,
-                tx_rx_zeros=tx_zeros_a,
-                tx_freq=links[link].freq_b,
-                rx_freq=links[link].freq_a,
-                is_opposite_included=is_b_in,
-                channel_identifier=ChannelIdentifier.CHANNEL_0,
-                log_run_id=log_run_id,
-            )
-            if unit_a_channels is not None:
-                link_channels.extend(unit_a_channels)
-            else:
-                continue
-
-            # Side/unit B (channel A to B)
-            unit_b_channels = _sort_into_channels(
-                influx_data=influx_data,
-                links=links,
-                link_id=link,
-                link_channel_selector=selected_links[link],
-                tx_ip=links[link].ip_a,
-                rx_ip=links[link].ip_b,
-                tx_tx_zeros=tx_zeros_a,
-                tx_rx_zeros=tx_zeros_b,
-                tx_freq=links[link].freq_a,
-                rx_freq=links[link].freq_b,
-                is_opposite_included=is_a_in,
-                channel_identifier=ChannelIdentifier.CHANNEL_1,
-                log_run_id=log_run_id,
-            )
-            if unit_b_channels is not None:
-                link_channels.extend(unit_b_channels)
-            else:
-                continue
-
-            calc_data.append(xr.concat(link_channels, dim="channel_id"))
-            current_link += 1
-
-        return calc_data
-
-    except BaseException as error:
-
-        logger.error(
-            "[%s] An unexpected error occurred during data processing: %s %s.\n"
-            "Last processed microwave link ID: %d\n"
-            "Calculation thread terminated.",
-            log_run_id,
-            type(error),
-            error,
-            link,
-        )
-
-        traceback.print_exc()
-
-        raise ProcessingException(
-            "Error occured during influx data merging with metadata into xarray datasets."
-        )
-
-
-@measure_time
-def get_ips_from_links_dict(selected_links: dict, links: dict) -> list[str]:
-    if len(selected_links) < 1:
+    if not selected_links:
         raise ValueError("Empty selection array.")
 
-    ips = []
-    for link_id in selected_links:
-        if link_id not in links:
+    ips: set[str] = set()
+    for link_id, enabled in selected_links.items():
+        if not enabled:
             continue
-
-        link = links[link_id]
-        selector = selected_links[link_id]
-
-        if link.tech in ["1s10", "summit", "summit_bt"]:
-            if selector == 1:
-                ips.append(link.ip_a)
-            elif selector == 2:
-                ips.append(link.ip_b)
-            elif selector == 3:
-                ips.append(link.ip_a)
-                ips.append(link.ip_b)
-        elif selector == 0:
+        link = links.get(link_id)
+        if link is None:
             continue
-        else:
-            ips.append(link.ip_a)
-            ips.append(link.ip_b)
+        ips.add(link.ip_a)
+        ips.add(link.ip_b)
 
-    return list(set(ips))  # remove duplicates
+    return list(ips)
 
 
 @measure_time
 def load_data_from_influxdb(
     influx_man: InfluxManager,
     config: dict,
-    selected_links: dict[int, int],
-    links: dict[int, MwLink],
+    selected_links: Dict[int, int],
+    links: Dict[int, MwLink],
     log_run_id: str = "default",
     realtime: bool = False,
     realtime_timewindow: str = "1d",
-) -> tuple[
-    dict[str, Union[dict[str, dict[datetime, float]], str]], list[int], list[str]
-]:
+) -> Tuple[pd.DataFrame, List[int], List[str]]:
+    """
+    New version: returns a pandas DataFrame instead of dict-of-dicts.
+
+    DataFrame columns (as returned by InfluxManager.query_units*):
+        _time (datetime64[ns, UTC])
+        agent_host (str)
+        temperature (float)
+        rx_power (float)
+        tx_power (float)
+    """
     try:
         ips = get_ips_from_links_dict(selected_links, links)
         logger.info(
-            "[%s] Querying InfluxDB for selected microwave links data...", log_run_id
+            "[%s] Querying InfluxDB for selected microwave links data...",
+            log_run_id,
         )
 
-        # Realtime calculation is being done
         if realtime:
             logger.info("[%s] Realtime data procedure started.", log_run_id)
-            influx_data = influx_man.query_units_realtime(
-                ips,
-                realtime_timewindow,
-                config["time"]["step"],
+            df = influx_man.query_units_realtime(
+                ips=ips,
+                realtime_window_str=realtime_timewindow,
+                interval=config["time"]["step"],
             )
-
-        # In other case, notify we are doing historic calculation
         else:
             logger.info("[%s] Historic data procedure started.", log_run_id)
-            influx_data = influx_man.query_units(
-                ips,
-                config["time"]["start"],
-                config["time"]["end"],
-                config["time"]["step"],
-                config["wet_dry"]["rolling_values"],
-                config["historic"]["compensate_historic"],
+            df = influx_man.query_units(
+                ips=ips,
+                start=config["time"]["start"],
+                end=config["time"]["end"],
+                interval=config["time"]["step"],
+                rolling_values=config["wet_dry"]["rolling_values"],
+                compensate_historic=config["historic"]["compensate_historic"],
             )
 
-        diff = len(ips) - len(influx_data)
+        if df is None or df.empty:
+            logger.info("[%s] Influx returned empty DataFrame.", log_run_id)
+            empty_df = pd.DataFrame(
+                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
+            )
+            # treat all links as missing
+            return empty_df, list(links.keys()), ips
+
+        # Determine missing IPs based on DataFrame
+        present_ips = set(df["agent_host"].unique())
+        missing_links: List[int] = []
+
+        for ip in ips:
+            if ip not in present_ips:
+                for link_id, link in links.items():
+                    if link.ip_a == ip or link.ip_b == ip:
+                        missing_links.append(link_id)
+                        break
+
         logger.info(
-            "[%s] Querying done. Got data of %d units, of total %d selected units.",
+            "[%s] Querying done. Got data for %d IPs (of %d selected IPs).",
             log_run_id,
-            len(influx_data),
+            len(present_ips),
             len(ips),
         )
 
-        missing_links = []
-        if diff > 0:
-            logger.debug(
-                "[%s] %d units are not available in selected time window:",
-                log_run_id,
-                diff,
-            )
-            for ip in ips:
-                if ip not in influx_data:
-                    for link in links:
-                        if links[link].ip_a == ip:
-                            logger.debug(
-                                "[%s] Link: %d; Tech: %s; SIDE A: %s; IP: %s",
-                                log_run_id,
-                                links[link].link_id,
-                                links[link].tech,
-                                links[link].name_a,
-                                links[link].ip_a,
-                            )
-                            missing_links.append(link)
-                            break
-                        elif links[link].ip_b == ip:
-                            logger.debug(
-                                "[%s] Link: %d; Tech: %s; SIDE B: %s; IP: %s",
-                                log_run_id,
-                                links[link].link_id,
-                                links[link].tech,
-                                links[link].name_b,
-                                links[link].ip_b,
-                            )
-                            missing_links.append(link)
-                            break
-        return influx_data, missing_links, ips
+        return df, missing_links, ips
 
     except BaseException as error:
-
         logger.error(
             "[%s] An unexpected error occurred during InfluxDB query: %s %s.\n"
             "Calculation thread terminated.",
@@ -283,69 +119,73 @@ def load_data_from_influxdb(
             type(error),
             error,
         )
-
         traceback.print_exc()
-
         raise ProcessingException("Error occurred during InfluxDB query.")
 
 
-class ChannelIdentifier(Enum):
-    CHANNEL_0 = "A(rx)_B(tx)"  # unit B (transmit) --> unit A (receive)
-    CHANNEL_1 = "B(rx)_A(tx)"  # unit A (transmit) --> unit B (receive)
+# ======================================================================
+# Optional: legacy helper, kept for completeness
+# ======================================================================
 
 
-def _fill_channel_dataset(
-    current_link,
-    flux_data,
-    tx_ip,
-    rx_ip,
-    channel_id,
-    freq,
-    tx_zeros: bool = False,
-    is_empty_channel: bool = False,
-) -> xr.Dataset:
-    # get times from the Rx power array => since Rx unit should be always available, rx_ip can be used
-    times = []
-    for timestamp in flux_data[rx_ip]["rx_power"].keys():
-        times.append(
-            np.datetime64(timestamp.replace(tzinfo=None)).astype("datetime64[ns]")
-        )
+def _build_channel_dataset_from_df(
+    link_obj: MwLink,
+    df_rx: Optional[pd.DataFrame],
+    df_tx: Optional[pd.DataFrame],
+    channel_id: str,
+    freq_tx: int,
+) -> Optional[xr.Dataset]:
+    """
+    Build an xarray Dataset for one channel using pandas DataFrames.
 
-    # if creating empty channel dataset, fill data vars with zeros
-    if is_empty_channel:
-        rsl = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
+    df_rx: DataFrame with columns ["_time", "rx_power", "temperature"]
+    df_tx: DataFrame with columns ["_time", "tx_power", "temperature"] (may be None)
 
-        # => get array length from rx_power of rx_ip, since it should be always defined
-        temperature_rx = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
-        temperature_tx = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
+    channel_id examples:
+        "A(rx)_B(tx)"  # unit B (tx) -> unit A (rx)
+        "B(rx)_A(tx)"  # unit A (tx) -> unit B (rx)
 
-        dummy = True
+    freq_tx: transmit frequency for this direction (in MHz * 1000, like original),
+             will be stored as freq_tx / 1000 in the "frequency" coordinate.
+    """
+    if df_rx is None or df_rx.empty:
+        return None
+
+    # Sort and drop duplicate timestamps, keep last occurrence
+    df_rx = df_rx.sort_values("_time")
+    df_rx = df_rx.drop_duplicates(subset=["_time"], keep="last").set_index("_time")
+
+    # reference time axis = RX times
+    times = df_rx.index.unique().sort_values()
+
+    # RSL (received signal level)
+    rsl = df_rx.reindex(times)["rx_power"].to_numpy(dtype=float)
+
+    # Temperatures (RX)
+    temperature_rx = (
+        df_rx.reindex(times)["temperature"].fillna(0.0).to_numpy(dtype=float)
+    )
+
+    # TX side (tsl, temperature_tx)
+    if df_tx is None or df_tx.empty:
+        # fill with zeros if no TX data
+        tsl = np.zeros_like(rsl)
+        temperature_tx = np.zeros_like(rsl, dtype=float)
     else:
-        rsl = [*flux_data[rx_ip]["rx_power"].values()]
+        df_tx = df_tx.sort_values("_time")
+        df_tx = df_tx.drop_duplicates(subset=["_time"], keep="last").set_index("_time")
+        aligned_tx = df_tx.reindex(times)
+        tsl = aligned_tx["tx_power"].fillna(0.0).to_numpy(dtype=float)
+        temperature_tx = aligned_tx["temperature"].fillna(0.0).to_numpy(dtype=float)
 
-        # temperature data can be missing in some cases, if so, fill with zeros
-        if "temperature" in flux_data[rx_ip].keys():
-            temperature_rx = [*flux_data[rx_ip]["temperature"].values()]
-        else:
-            temperature_rx = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
-        if tx_ip in flux_data and "temperature" in flux_data[tx_ip].keys():
-            temperature_tx = [*flux_data[tx_ip]["temperature"].values()]
-        else:
-            temperature_tx = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
+    # Summit / Summit_bt sign flip (Rx power)
+    if link_obj.tech in ["summit", "summit_bt"]:
+        rsl = -rsl
 
-        dummy = False
+    # Convert times to numpy datetime64[ns]
+    times_np = times.to_numpy(dtype="datetime64[ns]")
 
-    # in case of Tx power zeros, we don't have data of Tx unit available in flux_data
-    if tx_zeros:
-        # => get array length from rx_power of rx_ip, since it should be always defined
-        tsl = np.zeros((len(flux_data[rx_ip]["rx_power"]),), dtype=float)
-    else:
-        tsl = [*flux_data[tx_ip]["tx_power"].values()]
-
-    if current_link.tech in ["summit", "summit_bt"]:
-        rsl = [-x for x in rsl]
-
-    channel = xr.Dataset(
+    ds = xr.Dataset(
         data_vars={
             "tsl": ("time", tsl),
             "rsl": ("time", rsl),
@@ -353,101 +193,153 @@ def _fill_channel_dataset(
             "temperature_tx": ("time", temperature_tx),
         },
         coords={
-            "time": times,
+            "time": times_np,
             "channel_id": channel_id,
-            "cml_id": current_link.link_id,
-            "site_a_latitude": current_link.latitude_a,
-            "site_b_latitude": current_link.latitude_b,
-            "site_a_longitude": current_link.longitude_a,
-            "site_b_longitude": current_link.longitude_b,
-            "frequency": freq / 1000,
-            "polarization": current_link.polarization,
-            "length": current_link.distance,
-            "dummy_channel": dummy,
-            "dummy_a_latitude": current_link.dummy_latitude_a,
-            "dummy_b_latitude": current_link.dummy_latitude_b,
-            "dummy_a_longitude": current_link.dummy_longitude_a,
-            "dummy_b_longitude": current_link.dummy_longitude_b,
+            "cml_id": link_obj.link_id,
+            "site_a_latitude": link_obj.latitude_a,
+            "site_b_latitude": link_obj.latitude_b,
+            "site_a_longitude": link_obj.longitude_a,
+            "site_b_longitude": link_obj.longitude_b,
+            "frequency": freq_tx
+            / 1000.0,  # keep original behavior: frequency of TX / 1000
+            "polarization": link_obj.polarization,
+            "length": link_obj.distance,
         },
     )
 
-    return channel
+    return ds
 
 
-def _sort_into_channels(
-    influx_data: dict[str, Union[dict[str, dict[datetime, float]], str]],
-    links: dict[int, MwLink],
-    link_id: int,
-    link_channel_selector: int,
-    tx_ip: str,
-    rx_ip: str,
-    tx_tx_zeros: bool,
-    tx_rx_zeros: bool,
-    tx_freq: int,
-    rx_freq: int,
-    is_opposite_included: bool,
-    channel_identifier: ChannelIdentifier,
-    log_run_id: str,
-) -> Optional[list]:
-    """
-    Sorts link's data into channels and returns channels as a list of xarray datasets.
-    """
-    channels = []
+# ======================================================================
+# Main conversion: DataFrame -> list of xarray Datasets
+# ======================================================================
 
-    # ChannelIdentifier -> channel_selector mapping
-    channel_selector_map = {
-        ChannelIdentifier.CHANNEL_0: 1,
-        ChannelIdentifier.CHANNEL_1: 2,
-    }
-    all_channels_selector = 3
 
-    if (
-        link_channel_selector
-        in (channel_selector_map.get(channel_identifier), all_channels_selector)
-    ) and (rx_ip in influx_data):
-        if not tx_tx_zeros:
-            if len(influx_data[rx_ip]["rx_power"]) != len(
-                influx_data[tx_ip]["tx_power"]
-            ):
-                logger.warning(
-                    "[%s] Skipping link ID: %d. Non-coherent Rx/Tx data on channel %s.",
-                    log_run_id,
-                    link_id,
-                    channel_identifier.value,
-                )
-                return None
+@measure_time
+def convert_to_link_datasets(
+    selected_links: Dict[int, int],
+    links: Dict[int, MwLink],
+    df: pd.DataFrame,
+    missing_links: List[int],
+    log_run_id: str = "default",
+) -> List[xr.Dataset]:
 
-        channel_a = _fill_channel_dataset(
-            current_link=links[link_id],
-            flux_data=influx_data,
-            tx_ip=tx_ip,
-            rx_ip=rx_ip,
-            channel_id=channel_identifier.value,
-            freq=tx_freq,
-            tx_zeros=tx_tx_zeros,
+    if df is None or df.empty:
+        logger.warning("[%s] Empty DF in convert_to_link_datasets.", log_run_id)
+        return []
+
+    # ------------------------------------------------------------------
+    # Global sort + deduplicate per (agent_host, _time)
+    # ------------------------------------------------------------------
+    df = df.sort_values(["agent_host", "_time"])
+    df = df.drop_duplicates(subset=["agent_host", "_time"], keep="last")
+    df = df.set_index("_time")
+
+    # Pre-group once (fast after sorting + indexing)
+    groups: Dict[str, pd.DataFrame] = dict(tuple(df.groupby("agent_host", sort=False)))
+
+    calc_data: List[xr.Dataset] = []
+
+    def build_channel_fast(
+        link_obj: MwLink,
+        df_rx: pd.DataFrame,
+        df_tx: Optional[pd.DataFrame],
+        channel_id: str,
+        freq_tx: int,
+    ) -> xr.Dataset:
+        """Optimized channel builder with robust index handling."""
+
+        # Ensure sorted unique index on RX
+        df_rx = df_rx.sort_index()
+        if df_rx.index.has_duplicates:
+            df_rx = df_rx[~df_rx.index.duplicated(keep="last")]
+
+        times = df_rx.index.values  # sorted, unique
+
+        rsl = df_rx["rx_power"].to_numpy(dtype=float)
+        temperature_rx = df_rx["temperature"].fillna(0.0).to_numpy(dtype=float)
+
+        if df_tx is None or df_tx.empty:
+            tsl = np.zeros_like(rsl)
+            temperature_tx = np.zeros_like(rsl, dtype=float)
+        else:
+            df_tx = df_tx.sort_index()
+            if df_tx.index.has_duplicates:
+                df_tx = df_tx[~df_tx.index.duplicated(keep="last")]
+
+            # Align df_tx to df_rx index
+            aligned_tx = df_tx.reindex(df_rx.index)
+
+            tsl = aligned_tx["tx_power"].fillna(0.0).to_numpy(dtype=float)
+            temperature_tx = aligned_tx["temperature"].fillna(0.0).to_numpy(dtype=float)
+
+        if link_obj.tech in ["summit", "summit_bt"]:
+            rsl = -rsl
+
+        ds = xr.Dataset(
+            data_vars=dict(
+                tsl=("time", tsl),
+                rsl=("time", rsl),
+                temperature_rx=("time", temperature_rx),
+                temperature_tx=("time", temperature_tx),
+            ),
+            coords=dict(
+                time=times.astype("datetime64[ns]"),
+                channel_id=channel_id,
+                cml_id=link_obj.link_id,
+                site_a_latitude=link_obj.latitude_a,
+                site_b_latitude=link_obj.latitude_b,
+                site_a_longitude=link_obj.longitude_a,
+                site_b_longitude=link_obj.longitude_b,
+                frequency=freq_tx / 1000.0,
+                polarization=link_obj.polarization,
+                length=link_obj.distance,
+            ),
         )
-        channels.append(channel_a)
 
-        # if including only this channel, create empty second channel and fill it with zeros (pycomlink
-        # functions require both channels included -> with this hack it's valid, but zeros have no effect)
-        # rx and tx freqs are switched, since it's a (dummy) opposite channel
-        if (
-            link_channel_selector == channel_selector_map.get(channel_identifier)
-        ) or not is_opposite_included:
-            channel_b = _fill_channel_dataset(
-                current_link=links[link_id],
-                flux_data=influx_data,
-                tx_ip=rx_ip,  # rx will be always available (since it's a dummy channel, it doesn't matter)
-                rx_ip=rx_ip,
-                channel_id=(
-                    ChannelIdentifier.CHANNEL_1.value
-                    if channel_identifier == ChannelIdentifier.CHANNEL_0
-                    else ChannelIdentifier.CHANNEL_0.value
-                ),
-                freq=rx_freq,
-                tx_zeros=tx_rx_zeros,
-                is_empty_channel=True,
-            )
-            channels.append(channel_b)
+        return ds
 
-        return channels
+    # ============================================================
+    # MAIN LOOP
+    # ============================================================
+
+    for link_id, enabled in selected_links.items():
+        if not enabled:
+            continue
+
+        link = links.get(link_id)
+        if link is None:
+            continue
+
+        ip_a, ip_b = link.ip_a, link.ip_b
+
+        if ip_a not in groups or ip_b not in groups:
+            continue
+
+        df_a = groups[ip_a]
+        df_b = groups[ip_b]
+
+        # avoid pycomlink crash
+        if link.freq_a == link.freq_b:
+            link.freq_a += 1
+
+        # Build channels
+        ch_ab = build_channel_fast(
+            link_obj=link,
+            df_rx=df_a,
+            df_tx=df_b,
+            channel_id="A(rx)_B(tx)",
+            freq_tx=link.freq_b,
+        )
+
+        ch_ba = build_channel_fast(
+            link_obj=link,
+            df_rx=df_b,
+            df_tx=df_a,
+            channel_id="B(rx)_A(tx)",
+            freq_tx=link.freq_a,
+        )
+
+        calc_data.append(xr.concat([ch_ab, ch_ba], dim="channel_id"))
+
+    return calc_data

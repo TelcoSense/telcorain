@@ -1,5 +1,6 @@
 import traceback
 from typing import Any, Optional
+
 import numpy as np
 import xarray as xr
 from pycomlink.spatial.interpolator import IdwKdtreeInterpolator
@@ -40,33 +41,28 @@ def generate_rainfields(
     try:
         logger.info("[%s] Generating rainfields...", log_run_id)
 
-        # **********************************************************************
-        # ***** FIRST PART: Calculate overall rainfall accumulation field ******
-        # **********************************************************************
+        if not calc_data:
+            logger.warning("[%s] Empty calc_data, nothing to interpolate.", log_run_id)
+            if is_historic:
+                return rain_grids, None, None, None
+            else:
+                return rain_grids, None, None, None, realtime_runs, last_time
 
-        logger.debug(
-            "[%s] Resampling rain values for rainfall overall map...", log_run_id
+        # ------------------------------------------------------------------
+        # 0) Concatenate all links once and precompute geometry
+        # ------------------------------------------------------------------
+        # ds_all has dims: cml_id, channel_id, time
+        ds_all = xr.concat(calc_data, dim="cml_id")
+
+        # Compute centers once (broadcast over time automatically)
+        ds_all = ds_all.assign(
+            lat_center=(ds_all.site_a_latitude + ds_all.site_b_latitude) / 2,
+            lon_center=(ds_all.site_a_longitude + ds_all.site_b_longitude) / 2,
         )
 
-        # resample values to 1h means
-        calc_data_1h = xr.concat(
-            objs=[cml.R.resample(time="1H", label="right").mean() for cml in calc_data],
-            dim="cml_id",
-        ).to_dataset()
-
-        logger.debug(
-            "[%s] Interpolating spatial data for rainfall overall map...", log_run_id
-        )
-
-        # Compute midpoints for interpolation
-        calc_data_1h["lat_center"] = (
-            calc_data_1h.site_a_latitude + calc_data_1h.site_b_latitude
-        ) / 2
-        calc_data_1h["lon_center"] = (
-            calc_data_1h.site_a_longitude + calc_data_1h.site_b_longitude
-        ) / 2
-
-        # Create IDW interpolator
+        # ------------------------------------------------------------------
+        # 1) Create IDW interpolator & target grid (only once)
+        # ------------------------------------------------------------------
         interpolator = IdwKdtreeInterpolator(
             nnear=config["interp"]["idw_near"],
             p=config["interp"]["idw_power"],
@@ -74,7 +70,6 @@ def generate_rainfields(
             max_distance=config["interp"]["idw_dist"],
         )
 
-        # Generate coordinate grid
         x_coords = np.arange(
             config["limits"]["x_min"],
             config["limits"]["x_max"],
@@ -87,57 +82,69 @@ def generate_rainfields(
         )
         x_grid, y_grid = np.meshgrid(x_coords, y_coords)
 
-        # Compute overall accumulated rainfall
+        # N.B. x, y do not depend on time; re-use as NumPy arrays in loops
+        x_sites = ds_all.lon_center.values
+        y_sites = ds_all.lat_center.values
+
+        # ------------------------------------------------------------------
+        # 2) Overall accumulated rainfall field (1h means, sum over time)
+        # ------------------------------------------------------------------
+        logger.debug(
+            "[%s] Resampling rain values for rainfall overall map...", log_run_id
+        )
+
+        # 1h resample from concatenated dataset
+        calc_data_1h = ds_all.R.resample(time="1H", label="right").mean().to_dataset()
+
+        logger.debug(
+            "[%s] Interpolating spatial data for rainfall overall map...", log_run_id
+        )
+
+        # Mean over channels, then sum in time => total accumulation
+        z_overall = (
+            calc_data_1h.R.mean(dim="channel_id").sum(dim="time").values
+        )  # shape: (cml_id,)
+
         rain_grid = interpolator(
-            x=calc_data_1h.lon_center,
-            y=calc_data_1h.lat_center,
-            z=calc_data_1h.R.mean(dim="channel_id").sum(dim="time"),
+            x=x_sites,
+            y=y_sites,
+            z=z_overall,
             xgrid=x_grid,
             ygrid=y_grid,
         )
+        # (rain_grid is computed for consistency with original code; if needed,
+        # you can store or return it from here.)
 
-        # compute start and end timestamps (preserved but unused)
-        data_start = calc_data[0].time.min()
-        data_end = calc_data[0].time.max()
-        for link in calc_data:
-            times = link.time.values
-            data_start = min(data_start, times.min())
-            data_end = max(data_end, times.max())
-
-        # *******************************************************************
-        # ***** SECOND PART: Calculate individual fields for animation ******
-        # *******************************************************************
-
+        # ------------------------------------------------------------------
+        # 3) Time-step rainfall fields for animation
+        # ------------------------------------------------------------------
         if not config["raingrids"]["is_only_overall"]:
 
             logger.debug(
                 "[%s] Resampling data for rainfall animation maps...", log_run_id
             )
 
-            # resample data to desired resolution
-            ts = config["time"]["output_step"]
-            base_step = config["time"]["step"]
+            ts = config["time"]["output_step"]  # [minutes]
+            base_step = config["time"]["step"]  # [minutes]
 
+            # Decide source dataset for animation time steps
             if ts == 60:
+                # use 1h resample
                 calc_data_steps = calc_data_1h
             elif ts > base_step:
-                calc_data_steps = xr.concat(
-                    objs=[
-                        cml.R.resample(time=f"{ts}T", label="right").mean()
-                        for cml in calc_data
-                    ],
-                    dim="cml_id",
-                ).to_dataset()
+                # resample from base ds_all to desired step
+                calc_data_steps = (
+                    ds_all.R.resample(time=f"{ts}T", label="right").mean().to_dataset()
+                )
             elif ts == base_step:
-                calc_data_steps = xr.concat(calc_data, dim="cml_id")
+                # use base-resolution data as is
+                calc_data_steps = ds_all
             else:
-                raise ValueError("Invalid value of output_steps")
+                raise ValueError("Invalid value of output_step")
 
-            del calc_data
-
-            # convert mm/h to mm if needed
+            # convert mm/h → mm if requested
             if config["raingrids"]["is_output_total"]:
-                time_ratio = 60 / ts
+                time_ratio = 60.0 / float(ts)  # hours per step
                 calc_data_steps["R"] = calc_data_steps.R / time_ratio
 
             logger.debug(
@@ -145,45 +152,43 @@ def generate_rainfields(
                 log_run_id,
             )
 
-            # compute centers if not already done
-            if ts != 60:
-                calc_data_steps["lat_center"] = (
-                    calc_data_steps.site_a_latitude + calc_data_steps.site_b_latitude
-                ) / 2
-                calc_data_steps["lon_center"] = (
-                    calc_data_steps.site_a_longitude + calc_data_steps.site_b_longitude
-                ) / 2
+            # lat_center / lon_center already present on ds_all; xarray will
+            # carry them into resampled calc_data_steps (no need to recompute)
 
-            # Interpolation loop
+            # Precompute z(t) as NumPy for fast looping
+            # shape: (cml_id, time)
+            z_all = calc_data_steps.R.mean(dim="channel_id").values
+            times = calc_data_steps.time.values
+            min_rain = config["raingrids"]["min_rain_value"]
+
             grids_to_del = 0
-            for i in range(calc_data_steps.time.size):
+
+            for i in range(z_all.shape[1]):
+                z_t = z_all[:, i]
+
                 grid = interpolator(
-                    x=calc_data_steps.lon_center,
-                    y=calc_data_steps.lat_center,
-                    z=calc_data_steps.R.mean(dim="channel_id").isel(time=i),
+                    x=x_sites,
+                    y=y_sites,
+                    z=z_t,
                     xgrid=x_grid,
                     ygrid=y_grid,
                 )
-                grid[grid < config["raingrids"]["min_rain_value"]] = 0
+                grid[grid < min_rain] = 0.0
                 rain_grids.append(grid)
 
-                if is_historic:
-                    pass
-                else:
-                    last_time = calc_data_steps.time[i].values
+                if not is_historic:
+                    last_time = times[i]
                     if realtime_runs > 1:
                         grids_to_del += 1
 
-            # delete oldest frames (realtime only)
-            if not is_historic:
-                for _ in range(grids_to_del):
-                    del rain_grids[0]
+            # Maintain sliding window (realtime only)
+            if not is_historic and grids_to_del > 0:
+                # delete oldest frames in one slice
+                del rain_grids[:grids_to_del]
 
-            # cleanup
-            if calc_data_1h is not None:
-                del calc_data_1h
-
-            # RETURN VALUES
+            # ------------------------------------------------------------------
+            # 4) Return in the original shapes
+            # ------------------------------------------------------------------
             if is_historic:
                 return rain_grids, calc_data_steps, x_grid, y_grid
             else:
@@ -195,6 +200,13 @@ def generate_rainfields(
                     realtime_runs,
                     last_time,
                 )
+
+        # If only overall field is requested, still return something consistent
+        # with the previous API (no per-step fields).
+        if is_historic:
+            return rain_grids, calc_data_1h, x_grid, y_grid
+        else:
+            return rain_grids, calc_data_1h, x_grid, y_grid, realtime_runs, last_time
 
     except BaseException as error:
         logger.error(

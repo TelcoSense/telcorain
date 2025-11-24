@@ -505,18 +505,8 @@ def create_config_dict(path: str, format: bool = True) -> dict:
     return cfg
 
 
-def select_all_links(links: list[MwLink]) -> dict[int, int]:
-    selected_links = {}
-    for link in links:
-        selected_links[links[link].link_id] = 3
-    return selected_links
-
-
-def select_links(link_ids: list[int]) -> dict[int, int]:
-    selected_links = {}
-    for link_id in link_ids:
-        selected_links[link_id] = 3
-    return selected_links
+def select_all_links(links: dict[int, MwLink]) -> dict[int, bool]:
+    return {link_id: True for link_id in links}
 
 
 def measure_time(func):

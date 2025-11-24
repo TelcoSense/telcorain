@@ -27,7 +27,6 @@ def deep_merge_config(base: dict, updates: dict) -> dict:
 
 
 def run_hist_calc(cfg: dict):
-    # load global config dict
     preconfig = create_config_dict(path="./configs/config.ini", format=False)
     config = deep_merge_config(preconfig, cfg)
     config["time"]["start"] = ensure_utc(config["time"]["start"])
@@ -36,9 +35,7 @@ def run_hist_calc(cfg: dict):
     start_time = datetime.now()
     logger.info("Starting the historic calculation at: %s", start_time)
 
-    # create sql manager and filter out short links
     sql_man = SqlManager()
-    # load link definitions from MariaDB
     links = sql_man.load_metadata(
         ids=config["user_info"]["links_id"],
         min_length=config["cml"]["min_length"],
@@ -46,9 +43,7 @@ def run_hist_calc(cfg: dict):
         exclude_ids=True,
     )
 
-    # select all links
     selected_links = select_all_links(links=links)
-    # define calculation object
     calculation = Calculation(
         influx_man=influx_man,
         links=links,
@@ -62,12 +57,9 @@ def run_hist_calc(cfg: dict):
     # run the calculation
     calculation.run()
 
-    # create the writer object and write the results to disk
     writer = Writer(
-        sql_man=sql_man,
         influx_man=influx_man,
-        skip_influx=config["historic"]["skip_influx"],
-        skip_sql=config["historic"]["skip_mariadb"],
+        skip_influx=config["realtime"]["skip_influx_write"],
         config=config,
         is_historic=True,
     )
@@ -83,22 +75,17 @@ def run_hist_calc(cfg: dict):
 if __name__ == "__main__":
     # this comes from the web app settings
     cfg = {
-        # time setting (probably dont change step and output_step)
+        # time setting
         "time": {
             "step": 10,
             "output_step": 10,
-            "start": datetime(2023, 10, 20, 3, 30, tzinfo=None),
-            "end": datetime(2023, 10, 20, 20, 30, tzinfo=timezone.utc),
+            "start": datetime(2023, 10, 13, 3, 30, tzinfo=None),
+            "end": datetime(2023, 10, 20, 20, 30, tzinfo=None),
         },
         # CML filtering
         "cml": {
             "min_length": 0.5,
             "max_length": 100,
-        },
-        # db settings for historic calculation
-        "historic": {
-            "skip_influx": True,
-            "skip_mariadb": True,
         },
         # user info for folder names and link selection (list of IDs)
         "user_info": {

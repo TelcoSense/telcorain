@@ -14,7 +14,6 @@ from telcorain.calculation import Calculation
 from telcorain.helpers import create_config_dict, select_all_links
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-filterwarnings("ignore", category=UserWarning, module="pycomlink")
 filterwarnings("ignore", category=FutureWarning)
 filterwarnings("ignore", category=DeprecationWarning)
 simplefilter(action="ignore", category=FutureWarning)
@@ -132,41 +131,19 @@ class TelcorainCLI:
             clean_raw=self.config["directories"]["clean_raw"],
             clean_web=self.config["directories"]["clean_web"],
         )
-        deleted_rows = self.sql_man.delete_old_data(
-            current_time,
-            retention_window=self.delta_map.get(
-                self.config["realtime"]["retention_window"]
-            ),
-        )
 
-        self.logger.info(
-            f"Cleanup: Removed {removed_files} files, kept {kept_files}, "
-            f"deleted {deleted_rows} DB rows"
-        )
+        self.logger.info(f"Cleanup: Removed {removed_files} files, kept {kept_files}")
 
         # fetch the data and run the calculation
         calculation.run(realtime_timewindow=realtime_timewindow)
 
         # create the realtime writer object
         writer = Writer(
-            sql_man=self.sql_man,
             influx_man=self.influx_man,
             skip_influx=self.config["realtime"]["skip_influx_write"],
-            skip_sql=self.config["realtime"]["skip_mariadb_write"],
             config=self.config,
             since_time=since_time,
             is_historic=False,
-        )
-
-        # write to the SQL
-        self.sql_man.insert_realtime(
-            self.realtime_timewindow,
-            self.repetition_interval,
-            self.config["interp"]["interp_res"],
-            self.config["limits"]["x_min"],
-            self.config["limits"]["x_max"],
-            self.config["limits"]["y_min"],
-            self.config["limits"]["y_max"],
         )
 
         # write to the local storage
