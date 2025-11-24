@@ -25,28 +25,41 @@ It reads CML power/temperature data from InfluxDB, uses metadata from MariaDB, c
 
 ```
 telcorain/
+├─ assets/
+│  ├─ brno.png
+│  ├─ czechia.json
+│  └─ plain_czechia.png
+├─ cml_info/
+│  └─ invalid_cmls.csv
 ├─ configs/
 │  └─ config.ini
+├─ env_info/
+│  ├─ environment_base.yml
+│  ├─ environment_full.yml
+│  └─ requirements_full.txt
+├─ logs
 ├─ telcorain/
-│  ├─ calculation.py
-│  ├─ cli.py
-│  ├─ run_historic.py
-│  ├─ handlers.py
-│  ├─ helpers.py
-│  ├─ writer.py
-│  ├─ dataprocessing.py
+│  ├─ cython
 │  ├─ database/
 │  │  ├─ influx_manager.py
 │  │  └─ sql_manager.py
 │  ├─ procedures/
 │  │  ├─ rain/
 │  │  │  ├─ rain_calculation.py
-│  │  │  └─ rainfields_generation.py
+│  │  │  ├─ rainfields_generation.py
+│  │  │  └─ temperature_compensation.py
 │  │  ├─ wet_dry/
 │  │  └─ exceptions.py
-│  └─ cython/
-│     └─ raincolor.*
-├─ environment_full.yml
+│  ├─ __init__.py
+│  ├─ calculation.py
+│  ├─ dataprocessing.py
+│  ├─ handlers.py
+│  ├─ helpers.py
+│  ├─ writer.py
+├─ .gitignore 
+├─ README..md
+├─ run_cli.py
+├─ run_historic.py
 └─ README.md
 ```
 
@@ -62,14 +75,8 @@ telcorain/
 
 ### 2. Create the environment
 ```bash
-conda env create -f environment_full.yml
-conda activate telcorain_rework
-```
-
-If the environment exists:
-```bash
-conda env remove -n telcorain_rework
-conda env create -f environment_full.yml
+conda env create -f env_info/environment_full.yml
+conda activate telcorain_env
 ```
 
 ### 3. Configure `config.ini`
@@ -91,7 +98,7 @@ Responsible for reading CML time series from InfluxDB and optionally writing rai
 ### Key methods
 
 - **query_units(...)**
-  - Executes historic window queries  
+  - Executes window queries  
   - Returns a pivoted wide DataFrame  
 
 - **query_units_realtime(...)**
@@ -173,8 +180,6 @@ Writes outputs to disk and optionally to InfluxDB.
 - **_write_timeseries_historic**  
 - **push_results(...)**
 
-Ensures directories exist before writing.
-
 ---
 
 ## 7. Calculation (`calculation.py`)
@@ -195,7 +200,7 @@ Central orchestrator for one pipeline run.
 
 ### Realtime mode
 ```bash
-python -m telcorain.cli --run
+python run_cli.py
 ```
 
 Loop:
@@ -206,7 +211,7 @@ Loop:
 
 ### Historic mode
 ```bash
-python telcorain/run_historic.py
+python run_historic.py
 ```
 
 Configure:
@@ -216,10 +221,4 @@ Configure:
 - WAA & wet/dry settings  
 
 ---
-
-## Notes on portability
-
-- Windows env: keep python/numpy/pandas/...  
-- Linux: remove VC/Windows packages  
-- GPU TensorFlow/PyTorch: install platform-specific wheels  
 
