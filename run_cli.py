@@ -133,8 +133,6 @@ class TelcorainCLI:
         self, calculation: Calculation, realtime_timewindow: str
     ) -> None:
         """Run a single realtime iteration."""
-        self.logger.info("Starting new calculation...")
-
         current_time, next_time, since_time = self._get_times()
 
         # Cleanup old data (always counts existing files; only deletes if enabled)
@@ -243,9 +241,6 @@ class TelcorainCLI:
             kept = 0
 
             if not folder.exists():
-                logger.warning(
-                    "Cleanup[%s]: folder %s does not exist, skipping.", label, folder
-                )
                 return 0, 0
 
             for file_path in folder.glob("*"):
