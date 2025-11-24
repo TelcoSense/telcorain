@@ -60,20 +60,13 @@ def load_data_from_influxdb(
     """
     try:
         ips = get_ips_from_links_dict(selected_links, links)
-        logger.info(
-            "[%s] Querying InfluxDB for selected microwave links data...",
-            log_run_id,
-        )
-
         if realtime:
-            logger.info("[%s] Realtime data procedure started.", log_run_id)
             df = influx_man.query_units_realtime(
                 ips=ips,
                 realtime_window_str=realtime_timewindow,
                 interval=config["time"]["step"],
             )
         else:
-            logger.info("[%s] Historic data procedure started.", log_run_id)
             df = influx_man.query_units(
                 ips=ips,
                 start=config["time"]["start"],
@@ -121,98 +114,6 @@ def load_data_from_influxdb(
         )
         traceback.print_exc()
         raise ProcessingException("Error occurred during InfluxDB query.")
-
-
-# ======================================================================
-# Optional: legacy helper, kept for completeness
-# ======================================================================
-
-
-def _build_channel_dataset_from_df(
-    link_obj: MwLink,
-    df_rx: Optional[pd.DataFrame],
-    df_tx: Optional[pd.DataFrame],
-    channel_id: str,
-    freq_tx: int,
-) -> Optional[xr.Dataset]:
-    """
-    Build an xarray Dataset for one channel using pandas DataFrames.
-
-    df_rx: DataFrame with columns ["_time", "rx_power", "temperature"]
-    df_tx: DataFrame with columns ["_time", "tx_power", "temperature"] (may be None)
-
-    channel_id examples:
-        "A(rx)_B(tx)"  # unit B (tx) -> unit A (rx)
-        "B(rx)_A(tx)"  # unit A (tx) -> unit B (rx)
-
-    freq_tx: transmit frequency for this direction (in MHz * 1000, like original),
-             will be stored as freq_tx / 1000 in the "frequency" coordinate.
-    """
-    if df_rx is None or df_rx.empty:
-        return None
-
-    # Sort and drop duplicate timestamps, keep last occurrence
-    df_rx = df_rx.sort_values("_time")
-    df_rx = df_rx.drop_duplicates(subset=["_time"], keep="last").set_index("_time")
-
-    # reference time axis = RX times
-    times = df_rx.index.unique().sort_values()
-
-    # RSL (received signal level)
-    rsl = df_rx.reindex(times)["rx_power"].to_numpy(dtype=float)
-
-    # Temperatures (RX)
-    temperature_rx = (
-        df_rx.reindex(times)["temperature"].fillna(0.0).to_numpy(dtype=float)
-    )
-
-    # TX side (tsl, temperature_tx)
-    if df_tx is None or df_tx.empty:
-        # fill with zeros if no TX data
-        tsl = np.zeros_like(rsl)
-        temperature_tx = np.zeros_like(rsl, dtype=float)
-    else:
-        df_tx = df_tx.sort_values("_time")
-        df_tx = df_tx.drop_duplicates(subset=["_time"], keep="last").set_index("_time")
-        aligned_tx = df_tx.reindex(times)
-        tsl = aligned_tx["tx_power"].fillna(0.0).to_numpy(dtype=float)
-        temperature_tx = aligned_tx["temperature"].fillna(0.0).to_numpy(dtype=float)
-
-    # Summit / Summit_bt sign flip (Rx power)
-    if link_obj.tech in ["summit", "summit_bt"]:
-        rsl = -rsl
-
-    # Convert times to numpy datetime64[ns]
-    times_np = times.to_numpy(dtype="datetime64[ns]")
-
-    ds = xr.Dataset(
-        data_vars={
-            "tsl": ("time", tsl),
-            "rsl": ("time", rsl),
-            "temperature_rx": ("time", temperature_rx),
-            "temperature_tx": ("time", temperature_tx),
-        },
-        coords={
-            "time": times_np,
-            "channel_id": channel_id,
-            "cml_id": link_obj.link_id,
-            "site_a_latitude": link_obj.latitude_a,
-            "site_b_latitude": link_obj.latitude_b,
-            "site_a_longitude": link_obj.longitude_a,
-            "site_b_longitude": link_obj.longitude_b,
-            "frequency": freq_tx
-            / 1000.0,  # keep original behavior: frequency of TX / 1000
-            "polarization": link_obj.polarization,
-            "length": link_obj.distance,
-        },
-    )
-
-    return ds
-
-
-# ======================================================================
-# Main conversion: DataFrame -> list of xarray Datasets
-# ======================================================================
 
 
 @measure_time
@@ -323,7 +224,7 @@ def convert_to_link_datasets(
         if link.freq_a == link.freq_b:
             link.freq_a += 1
 
-        # Build channels
+        # Build channels like in pycomlink
         ch_ab = build_channel_fast(
             link_obj=link,
             df_rx=df_a,

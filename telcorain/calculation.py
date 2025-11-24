@@ -80,10 +80,16 @@ class Calculation:
             self.realtime_runs += 1
             log_run_id = f"RUN: {self.realtime_runs}"
 
-        logger.info("[%s] Rainfall calculation procedure started.", log_run_id)
+        if self.is_historic:
+            further_info = "Historic"
+        else:
+            further_info = "Realtime"
+        logger.info(
+            f"[{log_run_id}] {further_info} rainfall calculation procedure started."
+        )
 
         # =====================================================================
-        # 1. LOAD DATA FROM INFLUX (pandas-first)
+        # 1. LOAD DATA FROM INFLUX
         # =====================================================================
         try:
             df, missing_links, ips = load_data_from_influxdb(
@@ -156,8 +162,6 @@ class Calculation:
 
         except RainfieldsGenException:
             return
-
-        logger.info("[%s] Rainfall calculation procedure ended.", log_run_id)
 
         # =====================================================================
         # 4. REALTIME housekeeping
