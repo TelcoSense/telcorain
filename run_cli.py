@@ -141,9 +141,10 @@ class TelcorainCLI:
             clean_raw=self.config["directories"]["clean_raw"],
             clean_web=self.config["directories"]["clean_web"],
         )
-        self.logger.info(
-            "Cleanup: removed %d files, kept %d files", removed_files, kept_files
-        )
+        if removed_files != 0:
+            self.logger.info(
+                "Cleanup: removed %d files, kept %d files", removed_files, kept_files
+            )
 
         # Fetch data and run calculation
         calculation.run(realtime_timewindow=realtime_timewindow)
@@ -189,7 +190,9 @@ class TelcorainCLI:
             f"Step: {self.config['time']['step']}",
             f"IsMLPEnabled: {self.config['wet_dry']['is_mlp_enabled']}",
             f"WAA method: {self.config['waa']['waa_method']}",
-            f"Interpolation: res {self.config['interp']['interp_res']}, "
+            f"Interpolation: res {self.config['interp']['interp_res']}",
+            f"Using mercator: {self.config['interp']['use_mercator']}",
+            f"Grid if used: {self.config['interp']['grid_step_m']}",
             f"power {self.config['interp']['idw_power']}",
             f"Realtime window: {self.config['realtime']['realtime_timewindow']}",
             f"Retention window: {self.config['realtime']['retention_window']}",

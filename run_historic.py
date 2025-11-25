@@ -26,7 +26,7 @@ def deep_merge_config(base: dict, updates: dict) -> dict:
 
 
 def run_hist_calc(cfg: dict):
-    preconfig = create_config_dict(path="./configs/config.ini", format=False)
+    preconfig = create_config_dict(path="./configs/config.ini", format=True)
     config = deep_merge_config(preconfig, cfg)
     config["time"]["start"] = ensure_utc(config["time"]["start"])
     config["time"]["end"] = ensure_utc(config["time"]["end"])
@@ -50,7 +50,6 @@ def run_hist_calc(cfg: dict):
         config=config,
         is_historic=True,
         results_id=0,
-        compensate_historic=config["historic"]["compensate_historic"],
     )
 
     # run the calculation
@@ -78,15 +77,15 @@ if __name__ == "__main__":
         "time": {
             "step": 10,
             "output_step": 10,
-            "start": datetime(2023, 10, 13, 3, 30, tzinfo=None),
-            "end": datetime(2023, 10, 20, 20, 30, tzinfo=None),
+            "start": datetime(2023, 10, 13, 6, 30, tzinfo=None),
+            "end": datetime(2023, 10, 13, 10, 30, tzinfo=None),
         },
         # CML filtering
         "cml": {"min_length": 0.5, "max_length": 100, "exclude_cmls": False},
         # user info for folder names and link selection (list of IDs)
         "user_info": {
             "folder_name": "kraken",
-            "links_id": [i for i in range(1, 1000)],
+            "links_id": [i for i in range(1, 200)],
         },
         "limits": {
             "x_min": 12.0905,

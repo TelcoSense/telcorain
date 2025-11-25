@@ -57,7 +57,6 @@ telcorain/
 │  ├─ helpers.py
 │  ├─ writer.py
 ├─ .gitignore 
-├─ README..md
 ├─ run_cli.py
 ├─ run_historic.py
 └─ README.md

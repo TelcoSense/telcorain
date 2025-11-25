@@ -5,14 +5,15 @@ import os
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Optional
-from PIL import Image
 
+from PIL import Image
 import numpy as np
 from influxdb_client import Point, WritePrecision
 from xarray import Dataset
 from shapely.geometry import shape, Point as GeoPoint
 from shapely.prepared import prep
-from shapely.ops import unary_union
+from shapely.ops import unary_union, transform as shp_transform
+from pyproj import Transformer
 
 from telcorain.helpers import dt64_to_unixtime, save_ndarray_to_file
 from telcorain.cython.raincolor import rain_to_rgba
@@ -56,16 +57,32 @@ class Writer:
         self.prep_poly = None
         self.bbox = None
 
+        # CRS flags
+        self.use_mercator = bool(
+            str(self.config.get("interp", {}).get("use_mercator", "false")).lower()
+            in {"true", "1", "yes"}
+        )
+
     # ------------------------------------------------------------------
     # POLYGON → STATIC MASK
     # ------------------------------------------------------------------
 
     def _load_polygon(self):
-        """Load and merge GeoJSON polygons."""
+        """Load and merge GeoJSON polygons, reproject to match grid CRS if needed."""
         with open(f"./assets/{self.geojson_file}", "r", encoding="utf-8") as f:
             data = json.load(f)
 
         polys = [shape(f["geometry"]).buffer(0) for f in data["features"]]
+
+        # Reproject polygon to EPSG:3857 if grid is in Mercator
+        if self.use_mercator:
+            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
+            def _proj(x, y, z=None):
+                return transformer.transform(x, y)
+
+            polys = [shp_transform(_proj, p) for p in polys]
+
         merged = unary_union(polys).buffer(0)
         prep_poly = prep(merged)
 
@@ -88,8 +105,8 @@ class Writer:
         pts = np.column_stack((x_grid[bbox_mask], y_grid[bbox_mask]))
 
         flat_mask = []
-        for lon, lat in pts:
-            flat_mask.append(self.prep_poly.contains(GeoPoint(lon, lat)))
+        for x, y in pts:
+            flat_mask.append(self.prep_poly.contains(GeoPoint(x, y)))
 
         static_mask[bbox_mask] = flat_mask
         return static_mask
@@ -154,7 +171,6 @@ class Writer:
     def _write_timeseries_realtime(self, calc_dataset: Dataset, np_since_time):
         """
         Realtime: write rain_intensity to InfluxDB for all timestamps > since_time.
-        No MariaDB / last-raingrid logic anymore.
         """
         logger.debug("[WRITE: InfluxDB] Preparing realtime rain timeseries...")
 
@@ -171,8 +187,7 @@ class Writer:
             for cml in range(cmls_count):
                 cml_slice = filtered.isel(cml_id=cml)
                 cml_id = int(cml_slice.cml_id)
-                # precompute mean over channels for speed
-                r_mean = cml_slice.R.mean(dim="channel_id").values  # shape (time,)
+                r_mean = cml_slice.R.mean(dim="channel_id").values  # (time,)
 
                 for t in range(times_count):
                     points_to_write.append(
@@ -190,7 +205,6 @@ class Writer:
     def _write_timeseries_historic(self, calc_dataset: Dataset):
         """
         Historic: write all rain_intensity timeseries to InfluxDB.
-        Still no MariaDB writes.
         """
         logger.info("[WRITE: InfluxDB] Preparing historic rain timeseries...")
         points_to_write = []
@@ -201,7 +215,7 @@ class Writer:
         for cml in range(cmls_count):
             cml_slice = calc_dataset.isel(cml_id=cml)
             cml_id = int(cml_slice.cml_id)
-            r_mean = cml_slice.R.mean(dim="channel_id").values  # shape (time,)
+            r_mean = cml_slice.R.mean(dim="channel_id").values  # (time,)
 
             for t in range(times_count):
                 points_to_write.append(
@@ -234,14 +248,24 @@ class Writer:
             self.influx_man.is_manager_locked = False
             return
 
-        # Historic compensation (unchanged)
-        if self.is_historic and self.config.get("historic", {}).get(
-            "compensate_historic", False
-        ):
-            desired_start = self.config["time"]["start"]
-            desired_start = desired_start.astimezone(timezone.utc).replace(tzinfo=None)
-            calc_dataset = calc_dataset.sel(time=slice(desired_start, None))
+        hist_cfg = self.config.get("historic", {})
+
+        # Historic compensation: drop preloaded data before requested start
+        if self.is_historic and hist_cfg.get("compensate_historic", False):
+            requested_start = self.config["time"]["start"]
+
+            # normalise to UTC-naive for xarray
+            if requested_start.tzinfo is None:
+                requested_start_utc = requested_start.replace(tzinfo=timezone.utc)
+            else:
+                requested_start_utc = requested_start.astimezone(timezone.utc)
+            requested_start_utc = requested_start_utc.replace(tzinfo=None)
+
+            # keep only times >= requested_start_utc
+            calc_dataset = calc_dataset.sel(time=slice(requested_start_utc, None))
             time_len = calc_dataset.sizes["time"]
+
+            # drop the same number of leading grids
             rain_grids = rain_grids[-time_len:]
 
         # Ensure directories
@@ -253,7 +277,7 @@ class Writer:
         # I. raingrids → filesystem
         self._write_raingrids(rain_grids, x_grid, y_grid, calc_dataset)
 
-        # II. timeseries → InfluxDB only
+        # II. timeseries → InfluxDB
         if not self.skip_influx:
             if self.is_historic:
                 self._write_timeseries_historic(calc_dataset)

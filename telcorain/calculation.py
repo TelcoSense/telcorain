@@ -24,9 +24,9 @@ class Calculation:
     """
     Unified Calculation (realtime / historic).
 
-    Mode is controlled by:
-        - is_historic (bool)
-        - compensate_historic (bool)
+    x_grid, y_grid:
+        - If interp.use_mercator = False: lon/lat in degrees.
+        - If interp.use_mercator = True:  EPSG:3857 coordinates in metres.
     """
 
     def __init__(
@@ -38,7 +38,6 @@ class Calculation:
         *,
         is_historic: bool = False,
         results_id: Optional[int] = None,
-        compensate_historic: bool = False,
     ):
         self.influx_man = influx_man
         self.links = links
@@ -52,7 +51,6 @@ class Calculation:
         # historic mode settings
         self.is_historic = is_historic
         self.results_id = results_id
-        self.compensate_historic = compensate_historic
 
         # persistent grids/state
         self.rain_grids: list[np.ndarray] = []
@@ -71,19 +69,14 @@ class Calculation:
         Unified RUN function that behaves either like realtime or historic calculation.
         """
 
-        # ---------------------------
-        # Select run ID for logging
-        # ---------------------------
         if self.is_historic:
             log_run_id = "Historic run"
+            further_info = "Historic"
         else:
             self.realtime_runs += 1
             log_run_id = f"RUN: {self.realtime_runs}"
-
-        if self.is_historic:
-            further_info = "Historic"
-        else:
             further_info = "Realtime"
+
         logger.info(
             f"[{log_run_id}] {further_info} rainfall calculation procedure started."
         )

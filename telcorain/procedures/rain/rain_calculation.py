@@ -35,13 +35,17 @@ def get_rain_rates(
     """
     Compute rain rates for each link dataset in calc_data.
 
-    This version keeps the original xarray-based logic and shape handling:
     - tsl, rsl, temperature_* are (channel_id, time)
     - frequency is a coordinate with dim (channel_id)
     - length and polarization are scalar coordinates
     """
 
     current_link = 0
+
+    # switch for masking dry periods
+    # If True  -> dry periods (wet == False/0) → NaN in R
+    # If False -> dry periods remain as R computed from A (usually ~0 mm/h)
+    ignore_dry_links = bool(config["wet_dry"].get("ignore_dry_links", False))
 
     try:
         logger.debug("[%s] Smoothing signal data...", log_run_id)
@@ -55,7 +59,7 @@ def get_rain_rates(
         # 1) Pre-processing: smoothing + temperature correlation / compensation
         # ------------------------------------------------------------------
         for link in calc_data:
-            # Upper Tx power limit (40 dBm) – TODO: move to config if needed
+            # Upper Tx power limit (40 dBm)
             link["tsl"] = link.tsl.astype(float).where(link.tsl < 40.0)
             link["tsl"] = link.tsl.astype(float).interpolate_na(
                 dim="time", method="nearest", max_gap=None
@@ -241,16 +245,24 @@ def get_rain_rates(
             link["R"] = calc_R_from_A(
                 A=link.A,
                 L_km=float(link.length),
-                f_GHz=link.frequency,  # IMPORTANT: pass DataArray, not float(...)
-                pol=link.polarization,  # keep as in original
+                f_GHz=link.frequency,  # DataArray
+                pol=link.polarization,
             )
+
+            # Optionally ignore dry periods by setting R to NaN
+            if ignore_dry_links:
+                wet = link["wet"]
+                if wet.dtype == bool:
+                    wet_mask = wet
+                else:
+                    wet_mask = wet > 0.5  # treat > 0.5 as wet
+                link["R"] = link["R"].where(wet_mask, np.nan)
 
             current_link += 1
 
         return calc_data
 
     except BaseException as error:
-        # Be defensive if current_link points past the list
         bad_link = None
         if 0 <= current_link < len(calc_data):
             bad_link = calc_data[current_link]

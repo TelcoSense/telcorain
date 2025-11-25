@@ -30,10 +30,6 @@ class InfluxManager:
         Teplota, PrijimanaUroven / Signal, VysilaciVykon / Vysilany_Vykon.
     """
 
-    # ------------------------------------------------------------------
-    # initialization
-    # ------------------------------------------------------------------
-
     def __init__(self):
         super(InfluxManager, self).__init__()
 
@@ -59,10 +55,6 @@ class InfluxManager:
         self.BUCKET_OUT_CML: str = config_handler.read_option(
             "influx2", "bucket_out_cml"
         )
-
-    # ------------------------------------------------------------------
-    # basic helpers
-    # ------------------------------------------------------------------
 
     def check_connection(self) -> bool:
         return self.client.ping()
@@ -99,7 +91,7 @@ class InfluxManager:
             r["_field"] == "PrijimanaUroven" or
             r["_field"] == "Signal"
         )
-        |> filter(fn: (r) => r["agent_host"] =~ /{ips_regex}/)
+        |> filter(fn: (r) => r["agent_host"] =~ /^({ips_regex})$/)
         |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)
         |> pivot(rowKey:["_time","agent_host"], columnKey: ["_field"], valueColumn: "_value")
         """
@@ -257,10 +249,6 @@ class InfluxManager:
 
         return df
 
-    # ------------------------------------------------------------------
-    # public query API (pandas-first)
-    # ------------------------------------------------------------------
-
     @measure_time
     def query_units(
         self,
@@ -357,10 +345,6 @@ class InfluxManager:
             rolling_values=None,
             compensate_historic=False,
         )
-
-    # ------------------------------------------------------------------
-    # write API
-    # ------------------------------------------------------------------
 
     def write_points(self, points, bucket):
         with InfluxDBClient.from_config_file(config_handler.config_path) as client_out:

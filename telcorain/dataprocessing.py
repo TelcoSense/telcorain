@@ -1,5 +1,4 @@
 import traceback
-from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 
 import numpy as np
@@ -48,16 +47,7 @@ def load_data_from_influxdb(
     realtime: bool = False,
     realtime_timewindow: str = "1d",
 ) -> Tuple[pd.DataFrame, List[int], List[str]]:
-    """
-    New version: returns a pandas DataFrame instead of dict-of-dicts.
-
-    DataFrame columns (as returned by InfluxManager.query_units*):
-        _time (datetime64[ns, UTC])
-        agent_host (str)
-        temperature (float)
-        rx_power (float)
-        tx_power (float)
-    """
+    ...
     try:
         ips = get_ips_from_links_dict(selected_links, links)
         if realtime:
@@ -67,13 +57,43 @@ def load_data_from_influxdb(
                 interval=config["time"]["step"],
             )
         else:
+            # compute warm-up samples for historic compensation
+            hist_cfg = config.get("historic", {})
+            compensate = bool(hist_cfg.get("compensate_historic", False))
+
+            warmup_samples = None
+            if compensate:
+                wd_cfg = config.get("wet_dry", {})
+                rolling_vals = int(wd_cfg.get("rolling_values", 0) or 0)
+                baseline_samples = int(wd_cfg.get("baseline_samples", 0) or 0)
+
+                warmup_samples = max(rolling_vals, baseline_samples)
+
+                # If CNN is used, also respect its internal warm-up
+                if wd_cfg.get("is_mlp_enabled", False):
+                    try:
+                        from telcorain.procedures.wet_dry.cnn import (
+                            CNN_OUTPUT_LEFT_NANS_LENGTH,
+                        )
+
+                        warmup_samples = max(
+                            warmup_samples, int(CNN_OUTPUT_LEFT_NANS_LENGTH)
+                        )
+                    except Exception:
+                        # Fallback if CNN constant cannot be imported
+                        pass
+
+                if warmup_samples <= 0:
+                    warmup_samples = None
+
+            # Pass warmup_samples to InfluxManager as generic "rolling_values"
             df = influx_man.query_units(
                 ips=ips,
                 start=config["time"]["start"],
                 end=config["time"]["end"],
                 interval=config["time"]["step"],
-                rolling_values=config["wet_dry"]["rolling_values"],
-                compensate_historic=config["historic"]["compensate_historic"],
+                rolling_values=warmup_samples,
+                compensate_historic=compensate,
             )
 
         if df is None or df.empty:
