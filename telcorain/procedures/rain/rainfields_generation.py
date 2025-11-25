@@ -78,12 +78,6 @@ def generate_rainfields(
         # ds_all has dims: cml_id, channel_id, time
         ds_all = xr.concat(calc_data, dim="cml_id")
 
-        # Compute centers once (broadcast over time automatically)
-        ds_all = ds_all.assign(
-            lat_center=(ds_all.site_a_latitude + ds_all.site_b_latitude) / 2,
-            lon_center=(ds_all.site_a_longitude + ds_all.site_b_longitude) / 2,
-        )
-
         interp_cfg = config["interp"]
         limits = config["limits"]
 
@@ -92,6 +86,24 @@ def generate_rainfields(
         transformer: Optional[Transformer] = None
         if use_mercator:
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
+        # Compute geographic centers (deg)
+        lat_center = (ds_all.site_a_latitude + ds_all.site_b_latitude) / 2
+        lon_center = (ds_all.site_a_longitude + ds_all.site_b_longitude) / 2
+
+        # Convert all link centers to grid CRS *before interpolation*
+        if use_mercator:
+            x_sites, y_sites = transformer.transform(
+                lon_center.values.astype(float),
+                lat_center.values.astype(float),
+            )
+        else:
+            x_sites = lon_center.values.astype(float)
+            y_sites = lat_center.values.astype(float)
+
+        # Attach back to dataset to keep compatibility if something needs it
+        ds_all = ds_all.assign(x_center=("cml_id", x_sites))
+        ds_all = ds_all.assign(y_center=("cml_id", y_sites))
 
         # ------------------------------------------------------------------
         # 1) Create IDW interpolator & target grid (only once)
@@ -110,43 +122,38 @@ def generate_rainfields(
             x_lo, x_hi = sorted([x_min_m, x_max_m])
             y_lo, y_hi = sorted([y_min_m, y_max_m])
 
-            step_m = float(interp_cfg.get("grid_step_m", 1000.0))  # 1 km default
+            step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
             x_coords = np.arange(x_lo, x_hi, step_m)
             y_coords = np.arange(y_lo, y_hi, step_m)
         else:
             # Original behaviour: lon/lat grid in degrees
             x_coords = np.arange(
-                limits["x_min"],
-                limits["x_max"],
-                interp_cfg["interp_res"],
+                _to_float(limits["x_min"], limits["x_min"]),
+                _to_float(limits["x_max"], limits["x_max"]),
+                _to_float(interp_cfg["interp_res"], interp_cfg["interp_res"]),
             )
             y_coords = np.arange(
-                limits["y_min"],
-                limits["y_max"],
-                interp_cfg["interp_res"],
+                _to_float(limits["y_min"], limits["y_min"]),
+                _to_float(limits["y_max"], limits["y_max"]),
+                _to_float(interp_cfg["interp_res"], interp_cfg["interp_res"]),
             )
 
         x_grid, y_grid = np.meshgrid(x_coords, y_coords)
 
         # Site coordinates in the same CRS as the grid
-        if use_mercator:
-            lons = ds_all.lon_center.values.astype(float)
-            lats = ds_all.lat_center.values.astype(float)
-            x_sites, y_sites = transformer.transform(lons, lats)
-        else:
-            x_sites = ds_all.lon_center.values
-            y_sites = ds_all.lat_center.values
+        x_sites = ds_all.x_center.values
+        y_sites = ds_all.y_center.values
 
         # IDW parameters
-        nnear = interp_cfg["idw_near"]
-        p = interp_cfg["idw_power"]
+        nnear = int(interp_cfg["idw_near"])
+        p = _to_float(interp_cfg["idw_power"], interp_cfg["idw_power"])
 
         if use_mercator:
             max_distance = _to_float(
                 interp_cfg.get("idw_dist_m", 20000.0), 20000.0
             )  # metres
         else:
-            max_distance = interp_cfg["idw_dist"]  # degrees, original
+            max_distance = _to_float(interp_cfg.get("idw_dist", 0.4), 0.4)  # degrees
 
         interpolator = IdwKdtreeInterpolator(
             nnear=nnear,
@@ -235,6 +242,7 @@ def generate_rainfields(
                     last_time,
                 )
 
+        # Only overall field requested
         if is_historic:
             return rain_grids, calc_data_1h, x_grid, y_grid
         else:
