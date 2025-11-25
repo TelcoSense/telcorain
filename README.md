@@ -86,6 +86,25 @@ Sections:
 
 ---
 
+### 4. Build of raincolor using cython
+There is an optimized version of colorgrid matching that requires prebuild cython files. Especially on linux, you have to build essentials:
+
+```bash
+sudo apt-get install -y build-essential python3-dev
+```
+
+then cython:
+
+```bash
+conda install cython
+```
+
+and then run the setup:
+
+```bash
+python telcorain/cython/setup.py build_ext --inplace
+```
+
 ## Core components
 
 ---
