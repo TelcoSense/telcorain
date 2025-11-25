@@ -84,8 +84,6 @@ Sections:
 - `[mariadb]` → login, metadata DB  
 - `[directories]`, `[realtime]`, `[cml]`, `[time]`, `[wet_dry]`, `[waa]`, `[interp]`, `[rendering]`, `[logging]`
 
----
-
 ### 4. Build of raincolor using cython
 There is an optimized version of colorgrid matching that requires prebuild cython files. Especially on linux, you have to build essentials:
 
@@ -104,6 +102,8 @@ and then run the setup:
 ```bash
 python telcorain/cython/setup.py build_ext --inplace
 ```
+
+---
 
 ## Core components
 
