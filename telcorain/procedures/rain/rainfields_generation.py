@@ -123,8 +123,14 @@ def generate_rainfields(
             y_lo, y_hi = sorted([y_min_m, y_max_m])
 
             step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
-            x_coords = np.arange(x_lo, x_hi, step_m)
-            y_coords = np.arange(y_lo, y_hi, step_m)
+
+            # edges centers
+            # x_coords = np.arange(x_lo, x_hi, step_m)
+            # y_coords = np.arange(y_lo, y_hi, step_m)
+
+            # produce pixel centers instead of edges
+            x_coords = np.arange(x_lo + step_m / 2, x_hi, step_m)
+            y_coords = np.arange(y_lo + step_m / 2, y_hi, step_m)
         else:
             # Original behaviour: lon/lat grid in degrees
             x_coords = np.arange(
