@@ -85,7 +85,7 @@ if __name__ == "__main__":
         # user info for folder names and link selection (list of IDs)
         "user_info": {
             "folder_name": "kraken",
-            "links_id": [i for i in range(1, 200)],
+            "links_id": [i for i in range(1, 1000)],
         },
         "limits": {
             "x_min": 12.0905,
