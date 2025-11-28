@@ -101,10 +101,11 @@ if __name__ == "__main__":
             "baseline_samples": 5,
         },
         "interp": {
-            "interp_res": 0.025,
-            "idw_power": 2.5,
-            "idw_near": 10,
-            "idw_dist": 0.4,
+            "idw_power"=2,
+            "idw_near"=8,
+            "grid_nx"=598,
+            "grid_ny"=378,
+            "idw_dist_m"=30000.0,
         },
         "rendering": {
             "is_crop_enabled": True,

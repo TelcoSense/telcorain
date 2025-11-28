@@ -25,7 +25,6 @@ def _to_float(val, default):
                 return float(val)
             except ValueError:
                 pass
-    # fall back if parsing fails
     logger.warning(
         "Could not parse float from config value %r, using default %s",
         val,
@@ -106,7 +105,7 @@ def generate_rainfields(
         ds_all = ds_all.assign(y_center=("cml_id", y_sites))
 
         # ------------------------------------------------------------------
-        # 1) Create IDW interpolator & target grid (only once)
+        # 1) Create IDW interpolator & target grid
         # ------------------------------------------------------------------
         # Grid coordinates
         if use_mercator:
@@ -122,17 +121,76 @@ def generate_rainfields(
             x_lo, x_hi = sorted([x_min_m, x_max_m])
             y_lo, y_hi = sorted([y_min_m, y_max_m])
 
-            step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
+            # Grid size to match CHMI
+            nx_cfg = interp_cfg.get("grid_nx", None)
+            ny_cfg = interp_cfg.get("grid_ny", None)
 
-            # edges centers
-            # x_coords = np.arange(x_lo, x_hi, step_m)
-            # y_coords = np.arange(y_lo, y_hi, step_m)
+            if nx_cfg is not None and ny_cfg is not None:
+                nx = int(nx_cfg)
+                ny = int(ny_cfg)
+                dx = (x_hi - x_lo) / nx
+                dy = (y_hi - y_lo) / ny
+                logger.debug(
+                    "[%s] Using explicit Mercator grid: nx=%d, ny=%d, dx=%.2f m, dy=%.2f m",
+                    log_run_id,
+                    nx,
+                    ny,
+                    dx,
+                    dy,
+                )
+            else:
+                # Fallback: use grid_step_m (approximate 1 km)
+                step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
+                nx = int(np.round((x_hi - x_lo) / step_m))
+                ny = int(np.round((y_hi - y_lo) / step_m))
 
-            # produce pixel centers instead of edges
-            x_coords = np.arange(x_lo + step_m / 2, x_hi, step_m)
-            y_coords = np.arange(y_lo + step_m / 2, y_hi, step_m)
+                # Recompute dx, dy from integer pixel counts
+                dx = (x_hi - x_lo) / nx
+                dy = (y_hi - y_lo) / ny
+                logger.debug(
+                    "[%s] Using step_m ~ %.2f m -> nx=%d, ny=%d, dx=%.2f m, dy=%.2f m",
+                    log_run_id,
+                    step_m,
+                    nx,
+                    ny,
+                    dx,
+                    dy,
+                )
+
+            # Pixel centers
+            x_coords = x_lo + (np.arange(nx) + 0.5) * dx
+            y_coords = y_lo + (np.arange(ny) + 0.5) * dy
+
+            logger.debug(
+                "[%s] Limits (deg): x_min=%.6f, x_max=%.6f, y_min=%.6f, y_max=%.6f",
+                log_run_id,
+                x_min_deg,
+                x_max_deg,
+                y_min_deg,
+                y_max_deg,
+            )
+            logger.debug(
+                "[%s] Mercator extent: x_lo=%.1f, x_hi=%.1f (Δx=%.1f m), "
+                "y_lo=%.1f, y_hi=%.1f (Δy=%.1f m)",
+                log_run_id,
+                x_lo,
+                x_hi,
+                (x_hi - x_lo),
+                y_lo,
+                y_hi,
+                (y_hi - y_lo),
+            )
+            logger.debbug(
+                "[%s] Grid shape: ny=%d, nx=%d; dx=%.2f m, dy=%.2f m",
+                log_run_id,
+                ny,
+                nx,
+                dx,
+                dy,
+            )
+
         else:
-            # Original behaviour: lon/lat grid in degrees
+            # Or use lon/lat grid in degrees
             x_coords = np.arange(
                 _to_float(limits["x_min"], limits["x_min"]),
                 _to_float(limits["x_max"], limits["x_max"]),
