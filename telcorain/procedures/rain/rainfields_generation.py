@@ -180,7 +180,7 @@ def generate_rainfields(
                 y_hi,
                 (y_hi - y_lo),
             )
-            logger.debbug(
+            logger.debug(
                 "[%s] Grid shape: ny=%d, nx=%d; dx=%.2f m, dy=%.2f m",
                 log_run_id,
                 ny,
