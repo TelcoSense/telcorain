@@ -87,12 +87,6 @@ if __name__ == "__main__":
             "folder_name": "kraken",
             "links_id": [i for i in range(1, 1000)],
         },
-        "limits": {
-            "x_min": 12.0905,
-            "x_max": 18.8591,
-            "y_min": 48.5525,
-            "y_max": 51.0557,
-        },
         "wet_dry": {
             "is_mlp_enabled": False,
             "rolling_hours": 1.0,
@@ -101,11 +95,9 @@ if __name__ == "__main__":
             "baseline_samples": 5,
         },
         "interp": {
-            "idw_power"=2,
-            "idw_near"=8,
-            "grid_nx"=598,
-            "grid_ny"=378,
-            "idw_dist_m"=30000.0,
+            "idw_power": 2,
+            "idw_near": 8,
+            "idw_dist_m": 30000.0,
         },
         "rendering": {
             "is_crop_enabled": True,
