@@ -24,19 +24,19 @@ save_raw=False
 
 # database settings
 [influx2]
-url=http://192.168.64.168:8086
-org=vut
-token=Naj7vxakesjOSgRxSHs8SciwxekLrPO56UBp1cNWqeaOjAMS0YrENuxoamueMANNz8Ni0af2F8ghLRATpVfDJA==
+url=
+org=
+token=
 timeout=50000
 verify_ssl=False
 bucket_influx_data=realtime_cbl
 bucket_out_cml=telcorain_output
 
 [mariadb]
-address=127.0.0.1
-port=3307
-user=root
-pass=theredone
+address=
+port=
+user=
+pass=
 timeout=10000
 db_metadata=cml_metadata
 db_output=telcorain_output
