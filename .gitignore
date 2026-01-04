@@ -1,4 +1,46 @@
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Config files (keep .dist templates)
+configs/*.ini
+
+# Logs
+*.log
+*.log.*
+
+# Output directories
+outputs_web/
+outputs_cml/
+outputs_meteo/
+outputs_raw/
+saved_grids/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Custom
+/configs/*.ini
 /image_cache
 /outputs_raw
 /outputs_web
