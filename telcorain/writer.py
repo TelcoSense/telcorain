@@ -228,6 +228,7 @@ class Writer:
 
             # PNG name includes overall intensity: <UTC>_<0..1>.png
             existing_png = glob.glob(f"{self.outputs_web_dir}/{fname}_*.png")
+            existing_png += glob.glob(f"{self.outputs_web_dir}/{fname}.png")
 
             need_raw = self.config["directories"]["save_raw"] and not os.path.exists(
                 raw_path
