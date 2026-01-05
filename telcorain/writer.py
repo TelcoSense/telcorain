@@ -282,36 +282,45 @@ class Writer:
     def _write_json_rain_flags(
         self, calc_dataset: Dataset, t: int, fname: str, overall: float
     ) -> None:
-        """Write per-frame JSON with CML rain presence flags.
+        """Write per-frame JSON with only CML IDs where rain is present.
 
         Output format:
             {
-              "utc": "YYYY-MM-DD_HHMM",
-              "overall": 0.021,
-              "cml_rain": {"123": true, "124": false, ...}
+            "utc": "YYYY-MM-DD_HHMM",
+            "overall": 0.021,
+            "cml_rain_true": [123, 456, 789],
+            "count_true": 3,
+            "count_total": 331
             }
         """
         try:
             os.makedirs(self.outputs_json_dir, exist_ok=True)
 
-            # Rain present if any channel has rain > 0 at this time step
             sl = calc_dataset.isel(time=t)
-            r = sl.R.values  # shape: (cml_id, channel_id)
-            flags = {}
-            for i in range(sl.cml_id.size):
-                cid = int(sl.cml_id.values[i])
-                any_rain = bool(np.nanmax(r[i]) > 0.0) if r.size else False
-                flags[str(cid)] = any_rain
+            r = sl.R.values
+
+            true_ids: list[int] = []
+            if r is not None and r.size:
+                # any_rain if any channel > 0 (ignore NaNs)
+                # r shape: (n_cml, n_ch)
+                for i in range(sl.cml_id.size):
+                    cid = int(sl.cml_id.values[i])
+                    v = r[i]
+                    any_rain = bool(np.nanmax(v) > 0.0) if np.size(v) else False
+                    if any_rain:
+                        true_ids.append(cid)
 
             payload = {
                 "utc": fname,
                 "overall": float(round(overall, 4)),
-                "cml_rain": flags,
+                "cml_rain_true": true_ids,
+                "count_true": int(len(true_ids)),
+                "count_total": int(sl.cml_id.size),
             }
 
             out_path = os.path.join(self.outputs_json_dir, f"{fname}.json")
             with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
+                json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
         except Exception as e:
             logger.exception(f"[WRITE] JSON output failed for {fname}: {e}")
 

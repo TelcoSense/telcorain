@@ -40,7 +40,7 @@ saved_grids/
 Thumbs.db
 
 # Custom
-/configs/*.ini
+/configs/config.ini
 /image_cache
 /outputs_raw
 /outputs_web
