@@ -36,6 +36,7 @@ telcorain/
 ├─ env_info/
 │  ├─ environment_base.yml
 │  ├─ environment_full.yml
+│  ├─ environment_linux.yml
 │  └─ requirements_full.txt
 ├─ logs
 ├─ telcorain/
