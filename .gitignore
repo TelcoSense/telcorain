@@ -46,4 +46,5 @@ Thumbs.db
 /outputs_web
 /outputs_center
 /logs
-/outputs_historic/*
+/outputs_historic
+/outputs_json

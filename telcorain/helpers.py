@@ -487,12 +487,15 @@ def ensure_utc(dt: datetime) -> datetime:
 
 
 def create_config_dict(path: str, format: bool = True) -> dict:
-    parser = configparser.ConfigParser()
-    parser.read(path)
+    parser = configparser.ConfigParser(
+        inline_comment_prefixes=(";", "#"),
+        comment_prefixes=(";", "#"),
+    )
+    parser.read(path, encoding="utf-8")
 
     cfg = {}
     for section in parser.sections():
-        cfg[section] = {key: cast_value(value) for key, value in parser.items(section)}
+        cfg[section] = {k: cast_value(v) for k, v in parser.items(section)}
 
     if format:
         cfg["time"]["start"] = datetime.fromisoformat(cfg["time"]["start"]).replace(

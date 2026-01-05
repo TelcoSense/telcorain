@@ -1,7 +1,12 @@
-import sys
 import os
-import argparse
 from warnings import simplefilter, filterwarnings
+
+filterwarnings(
+    "ignore",
+    message=r".*pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
+import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import sleep
@@ -251,9 +256,15 @@ class TelcorainCLI:
                     continue
 
                 try:
-                    file_time = datetime.strptime(
-                        file_path.stem, "%Y-%m-%d_%H%M"
-                    ).replace(tzinfo=timezone.utc)
+                    stem = file_path.stem
+                    parts = stem.split("_")
+                    if len(parts) >= 2:
+                        stem = "_".join(
+                            parts[:2]
+                        )  # keep YYYY-MM-DD_HHMM, ignore suffix like _0.001
+                    file_time = datetime.strptime(stem, "%Y-%m-%d_%H%M").replace(
+                        tzinfo=timezone.utc
+                    )
                 except ValueError:
                     logger.warning(
                         "Cleanup[%s]: skipping non-timestamped file: %s",

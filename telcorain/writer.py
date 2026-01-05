@@ -1,5 +1,7 @@
 import json
 import os
+import glob
+import math
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Optional
@@ -38,13 +40,38 @@ class Writer:
         self.geojson_file = self.config["rendering"]["geojson_file"]
 
         # output dirs
-        if is_historic:
+        if self.is_historic:
             user_dir = self.config["user_info"]["folder_name"]
             self.outputs_raw_dir = f"outputs_historic/{user_dir}_raw"
             self.outputs_web_dir = f"outputs_historic/{user_dir}_web"
         else:
             self.outputs_raw_dir = self.config["directories"]["outputs_raw"]
             self.outputs_web_dir = self.config["directories"]["outputs_web"]
+
+        # Optional JSON output (realtime-only)
+        self.outputs_json_dir = self.config.get("directories", {}).get(
+            "outputs_json", "./outputs_json"
+        )
+        self.output_json_info = bool(
+            self.config.get("realtime", {}).get("output_json_info", False)
+        )
+
+        # Overall rain intensity (0..1) for per-frame naming
+        rg_cfg = self.config.get("raingrids", {})
+        self.overall_intensity_ref = float(rg_cfg.get("overall_intensity_ref", 20.0))
+        self.overall_intensity_method = str(
+            rg_cfg.get("overall_intensity_method", "mean")
+        ).lower()
+        self.overall_intensity_threshold = float(
+            rg_cfg.get("overall_intensity_threshold", rg_cfg.get("min_rain_value", 0))
+        )
+        self.overall_intensity_coverage_gamma = float(
+            rg_cfg.get("overall_intensity_coverage_gamma", 0.3)
+        )
+        self.overall_intensity_strength_gamma = float(
+            rg_cfg.get("overall_intensity_strength_gamma", 1.0)
+        )
+        self.min_if_any = float(rg_cfg.get("overall_intensity_min_if_any_link", 0.001))
 
         if since_time is None:
             since_time = datetime.min
@@ -107,6 +134,66 @@ class Writer:
     # PNG WRITER
     # ------------------------------------------------------------------
 
+    def _compute_overall_intensity(self, grid: np.ndarray) -> float:
+        """Compute a single 0..1 intensity value from a rain grid (mm/h).
+
+        Designed to be more sensitive near 0 using log1p scaling.
+        """
+        if grid is None:
+            return 0.0
+        # Ignore NaNs (outside mask / missing)
+        valid = np.asarray(grid, dtype=float)
+        if valid.size == 0:
+            return 0.0
+
+        method = self.overall_intensity_method
+
+        # Coverage-based methods
+        if method in {"coverage", "coverage_strength"}:
+            finite = np.isfinite(valid)
+            denom = int(np.count_nonzero(finite))
+            if denom == 0:
+                return 0.0
+            wet = finite & (valid > self.overall_intensity_threshold)
+            coverage = float(np.count_nonzero(wet)) / float(denom)
+            if method == "coverage":
+                return float(min(1.0, max(0.0, coverage)))
+
+            # Strength computed only on wet pixels (above threshold)
+            wet_vals = valid[wet]
+            if wet_vals.size == 0:
+                return 0.0
+            stat = float(np.nanmean(wet_vals))
+            if not math.isfinite(stat) or stat <= 0:
+                return 0.0
+
+            ref = max(self.overall_intensity_ref, 1e-6)
+            strength = math.log1p(stat) / math.log1p(ref)
+            strength = float(min(1.0, max(0.0, strength)))
+
+            # Nonlinear combination: coverage drives "how much of Czechia is wet",
+            # strength drives "how hard it rains".
+            cg = max(self.overall_intensity_coverage_gamma, 1e-6)
+            sg = max(self.overall_intensity_strength_gamma, 1e-6)
+            score = (coverage**cg) * (strength**sg)
+            return float(min(1.0, max(0.0, score)))
+
+        # Value-statistic methods (legacy)
+        if method == "p90":
+            stat = float(np.nanpercentile(valid, 90))
+        elif method == "p95":
+            stat = float(np.nanpercentile(valid, 95))
+        else:
+            stat = float(np.nanmean(valid))
+
+        if not math.isfinite(stat) or stat <= 0:
+            return 0.0
+
+        ref = max(self.overall_intensity_ref, 1e-6)
+        # log scaling gives better separation near 0
+        score = math.log1p(stat) / math.log1p(ref)
+        return float(min(1.0, max(0.0, score)))
+
     def _write_raingrids(
         self,
         rain_grids: list[np.ndarray],
@@ -138,13 +225,15 @@ class Writer:
             fname = dt.strftime("%Y-%m-%d_%H%M")
 
             raw_path = f"{self.outputs_raw_dir}/{fname}.npy"
-            png_path = f"{self.outputs_web_dir}/{fname}.png"
+
+            # PNG name includes overall intensity: <UTC>_<0..1>.png
+            existing_png = glob.glob(f"{self.outputs_web_dir}/{fname}_*.png")
 
             need_raw = self.config["directories"]["save_raw"] and not os.path.exists(
                 raw_path
             )
-            need_png = self.config["directories"]["save_web"] and not os.path.exists(
-                png_path
+            need_png = self.config["directories"]["save_web"] and (
+                len(existing_png) == 0
             )
 
             if not (need_raw or need_png):
@@ -156,6 +245,19 @@ class Writer:
             if self.is_crop_enabled:
                 grid = np.where(self.static_mask, grid, np.nan)
 
+            # compute overall intensity (0..1) on the cropped grid
+            overall = self._compute_overall_intensity(grid)
+
+            # if any link is wet, than overall is at least self.min_if_any
+            R = calc_dataset["R"].isel(time=t).values
+            any_link_wet = bool((R > 0).any())
+
+            if any_link_wet:
+                overall = max(overall, self.min_if_any)
+            overall_str = f"{overall:.3f}"
+
+            png_path = f"{self.outputs_web_dir}/{fname}_{overall_str}.png"
+
             # Save raw
             if need_raw:
                 save_ndarray_to_file(grid, raw_path)
@@ -166,7 +268,51 @@ class Writer:
                 rgba = np.flipud(rgba)
                 Image.fromarray(rgba, "RGBA").save(png_path)
 
+            # Optional JSON per-frame summary (realtime-only)
+            if not self.is_historic and self.output_json_info:
+                self._write_json_rain_flags(calc_dataset, t, fname, overall)
+
         logger.info("[WRITE] PNGs saved.")
+
+    # ------------------------------------------------------------------
+    # JSON WRITER (realtime-only)
+    # ------------------------------------------------------------------
+
+    def _write_json_rain_flags(
+        self, calc_dataset: Dataset, t: int, fname: str, overall: float
+    ) -> None:
+        """Write per-frame JSON with CML rain presence flags.
+
+        Output format:
+            {
+              "utc": "YYYY-MM-DD_HHMM",
+              "overall": 0.021,
+              "cml_rain": {"123": true, "124": false, ...}
+            }
+        """
+        try:
+            os.makedirs(self.outputs_json_dir, exist_ok=True)
+
+            # Rain present if any channel has rain > 0 at this time step
+            sl = calc_dataset.isel(time=t)
+            r = sl.R.values  # shape: (cml_id, channel_id)
+            flags = {}
+            for i in range(sl.cml_id.size):
+                cid = int(sl.cml_id.values[i])
+                any_rain = bool(np.nanmax(r[i]) > 0.0) if r.size else False
+                flags[str(cid)] = any_rain
+
+            payload = {
+                "utc": fname,
+                "overall": float(round(overall, 4)),
+                "cml_rain": flags,
+            }
+
+            out_path = os.path.join(self.outputs_json_dir, f"{fname}.json")
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+        except Exception as e:
+            logger.exception(f"[WRITE] JSON output failed for {fname}: {e}")
 
     # ------------------------------------------------------------------
     # TIMESERIES WRITING
@@ -244,6 +390,8 @@ class Writer:
             os.makedirs(self.outputs_web_dir, exist_ok=True)
         if self.config["directories"]["save_raw"]:
             os.makedirs(self.outputs_raw_dir, exist_ok=True)
+        if not self.is_historic and self.output_json_info:
+            os.makedirs(self.outputs_json_dir, exist_ok=True)
 
         # write PNGs
         self._write_raingrids(rain_grids, x_grid, y_grid, calc_dataset)

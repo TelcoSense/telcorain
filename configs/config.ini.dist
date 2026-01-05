@@ -17,6 +17,7 @@ logs=./logs
 outputs=./outputs
 outputs_web=./outputs_web
 outputs_raw=./outputs_raw
+outputs_json=./outputs_json
 clean_web=False
 clean_raw=True
 save_web=True
@@ -51,6 +52,7 @@ exclude_cmls=True
 [realtime]
 realtime_timewindow=1d
 retention_window=7d
+output_json_info=True
 skip_influx_write=True
 
 [historic]
@@ -75,18 +77,24 @@ waa_schleiss_tau=15
 [interp]
 interp_res=0.025
 idw_power=2
-idw_near=8
+idw_near=12
 idw_dist=0.4
 use_mercator=True
 grid_nx=598
 grid_ny=378
 grid_step_m=1000.0
-idw_dist_m=30000.0
+idw_dist_m=20000.0
 
 [raingrids]
 min_rain_value=0.1
 is_only_overall=False
 is_output_total=False
+overall_intensity_ref=20 
+overall_intensity_method=coverage ; mean / p90 / p95 or coverage_strength / coverage
+overall_intensity_threshold=0
+overall_intensity_min_if_any_link=0.001
+overall_intensity_coverage_gamma=0.3 ; sensitivity tuning (lower = more sensitive near 0)
+overall_intensity_strength_gamma=1.0
 
 [temp]
 is_temp_filtered=False
