@@ -1,23 +1,25 @@
-import json
-import os
 import glob
+import json
 import math
+import os
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Optional
 
 import numpy as np
-from PIL import Image
 from influxdb_client import Point, WritePrecision
-from xarray import Dataset
-from shapely.geometry import shape, Point as GeoPoint
-from shapely.ops import unary_union, transform as shp_transform
-from shapely.prepared import prep
+from PIL import Image
 from pyproj import Transformer
+from shapely.geometry import Point as GeoPoint
+from shapely.geometry import shape
+from shapely.ops import transform as shp_transform
+from shapely.ops import unary_union
+from shapely.prepared import prep
+from xarray import Dataset
 
+from telcorain.cython.raincolor import rain_to_rgba
 from telcorain.handlers import logger
 from telcorain.helpers import dt64_to_unixtime, save_ndarray_to_file
-from telcorain.cython.raincolor import rain_to_rgba
 
 
 class Writer:
@@ -28,6 +30,7 @@ class Writer:
         config: dict,
         since_time: Optional[datetime] = None,
         is_historic: bool = False,
+        is_web: bool = False,
         influx_wipe_thread: Optional[Thread] = None,
     ):
         self.influx_man = influx_man
@@ -40,7 +43,7 @@ class Writer:
         self.geojson_file = self.config["rendering"]["geojson_file"]
 
         # output dirs
-        if self.is_historic:
+        if is_historic:
             user_dir = self.config["user_info"]["folder_name"]
             self.outputs_raw_dir = f"outputs_historic/{user_dir}_raw"
             self.outputs_web_dir = f"outputs_historic/{user_dir}_web"
@@ -55,6 +58,13 @@ class Writer:
         self.output_json_info = bool(
             self.config.get("realtime", {}).get("output_json_info", False)
         )
+
+        if is_web:
+            output_dir = self.config["user_info"]["output_dir"]
+            output_dir_json = self.config["user_info"]["output_dir_json"]
+            self.outputs_json_dir = output_dir_json
+            self.outputs_raw_dir = f"{output_dir}_raw"
+            self.outputs_web_dir = f"{output_dir}"
 
         # Overall rain intensity (0..1) for per-frame naming
         rg_cfg = self.config.get("raingrids", {})
