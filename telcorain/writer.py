@@ -316,7 +316,11 @@ class Writer:
                 for i in range(sl.cml_id.size):
                     cid = int(sl.cml_id.values[i])
                     v = r[i]
-                    any_rain = bool(np.nanmax(v) > 0.0) if np.size(v) else False
+                    if v is None or np.size(v) == 0:
+                        any_rain = False
+                    else:
+                        v = np.asarray(v, dtype=float)
+                        any_rain = bool(np.isfinite(v).any() and np.nanmax(v) > 0.0)
                     if any_rain:
                         true_ids.append(cid)
 
