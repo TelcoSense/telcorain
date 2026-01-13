@@ -232,85 +232,124 @@ def generate_rainfields(
         # ------------------------------------------------------------------
         # 2) Time-step rainfall fields for animation
         # ------------------------------------------------------------------
-        if not config["raingrids"]["is_only_overall"]:
-            ts = config["time"]["output_step"]  # [minutes]
-            base_step = config["time"]["step"]  # [minutes]
+        ts = config["time"]["output_step"]  # [minutes]
+        base_step = config["time"]["step"]  # [minutes]
 
-            if ts == 60:
-                # use 1h resample
-                calc_data_steps = calc_data_1h
-            elif ts > base_step:
-                # resample from base ds_all to desired step
-                calc_data_steps = (
-                    ds_all.R.resample(time=f"{ts}T", label="right").mean().to_dataset()
-                )
-            elif ts == base_step:
-                # use base-resolution data as is
-                calc_data_steps = ds_all
-            else:
-                raise ValueError("Invalid value of output_step")
-
-            # convert mm/h → mm if requested
-            if config["raingrids"]["is_output_total"]:
-                time_ratio = 60.0 / float(ts)  # hours per step (kept as in original)
-                calc_data_steps["R"] = calc_data_steps.R / time_ratio
-
-            logger.debug(
-                "[%s] Interpolating spatial data for rainfall animation maps...",
-                log_run_id,
+        if ts == 60:
+            # use 1h resample
+            calc_data_steps = calc_data_1h
+        elif ts > base_step:
+            # resample from base ds_all to desired step
+            calc_data_steps = (
+                ds_all.R.resample(time=f"{ts}T", label="right").mean().to_dataset()
             )
+        elif ts == base_step:
+            # use base-resolution data as is
+            calc_data_steps = ds_all
+        else:
+            raise ValueError("Invalid value of output_step")
 
-            # Precompute z(t) as NumPy for fast looping
-            # shape: (cml_id, time)
-            z_all = calc_data_steps.R.mean(dim="channel_id").values
-            times = calc_data_steps.time.values
-            min_rain = config["raingrids"]["min_rain_value"]
+        logger.debug(
+            "[%s] Interpolating spatial data for rainfall animation maps...",
+            log_run_id,
+        )
 
-            grids_to_del = 0
+        # Precompute z(t) as NumPy for fast looping
+        # shape: (cml_id, time)
+        z_all = calc_data_steps.R.mean(dim="channel_id").values
+        times = calc_data_steps.time.values
+        min_rain = config["raingrids"]["min_rain_value"]
 
-            for i in range(z_all.shape[1]):
-                z_t = z_all[:, i]
+        # prepare hour sum computation
+        rain_grids_sum: list[np.ndarray] = []
+        hs_cfg = config.get("hour_sum", {})
+        hour_sum_enabled = bool(hs_cfg.get("enabled", False))
+        hour_sum_win_min = int(hs_cfg.get("window_minutes", 60))
 
-                grid = interpolator(
+        if hour_sum_enabled:
+            dt_hours = ts / 60.0
+            # convert mm/h -> mm per step
+            z_step_mm = z_all * dt_hours
+
+            win_steps = int(round(hour_sum_win_min / ts))
+            if win_steps < 1:
+                win_steps = 1
+
+            # rolling sum over time axis (axis=1), strict full window
+            z_hour_sum_all = np.full_like(z_step_mm, np.nan, dtype=float)
+            logger.debug(
+                "[%s] hour_sum: ts=%d min, win_steps=%d, first_valid_index=%d",
+                log_run_id,
+                ts,
+                win_steps,
+                win_steps - 1,
+            )
+            for j in range(win_steps - 1, z_step_mm.shape[1]):
+                z_hour_sum_all[:, j] = np.nansum(
+                    z_step_mm[:, j - win_steps + 1 : j + 1], axis=1
+                )
+
+            # attach into dataset (dims must match calc_data_steps: cml_id, time)
+            calc_data_steps["R_hour_sum"] = (("cml_id", "time"), z_hour_sum_all)
+        else:
+            z_hour_sum_all = None
+
+        grids_to_del = 0
+
+        for i in range(z_all.shape[1]):
+            z_t = z_all[:, i]
+
+            grid = interpolator(
+                x=x_sites,
+                y=y_sites,
+                z=z_t,
+                xgrid=x_grid,
+                ygrid=y_grid,
+            )
+            grid[grid < min_rain] = 0.0
+            rain_grids.append(grid)
+
+            # hour sum computation
+            if hour_sum_enabled and z_hour_sum_all is not None:
+                zsum_t = z_hour_sum_all[:, i]
+                grid_sum = interpolator(
                     x=x_sites,
                     y=y_sites,
-                    z=z_t,
+                    z=zsum_t,
                     xgrid=x_grid,
                     ygrid=y_grid,
                 )
-                grid[grid < min_rain] = 0.0
-                rain_grids.append(grid)
+                # zero small values
+                grid_sum[~np.isfinite(grid_sum)] = np.nan
+                grid_sum[grid_sum < 0.0] = 0.0
+                rain_grids_sum.append(grid_sum)
 
-                if not is_historic:
-                    last_time = times[i]
-                    if realtime_runs > 1:
-                        grids_to_del += 1
+            if not is_historic:
+                last_time = times[i]
+                if realtime_runs > 1:
+                    grids_to_del += 1
 
-            # Maintain sliding window (realtime only)
-            if not is_historic and grids_to_del > 0:
-                # delete oldest frames in one slice
-                del rain_grids[:grids_to_del]
+        # maintain sliding window
+        if not is_historic and grids_to_del > 0:
+            del rain_grids[:grids_to_del]
+            if rain_grids_sum is not None:
+                del rain_grids_sum[:grids_to_del]
 
-            # ------------------------------------------------------------------
-            # 3) Return in the original shapes
-            # ------------------------------------------------------------------
-            if is_historic:
-                return rain_grids, calc_data_steps, x_grid, y_grid
-            else:
-                return (
-                    rain_grids,
-                    calc_data_steps,
-                    x_grid,
-                    y_grid,
-                    realtime_runs,
-                    last_time,
-                )
-
-        # Only overall field requested
+        # ------------------------------------------------------------------
+        # 3) Return in the original shapes
+        # ------------------------------------------------------------------
         if is_historic:
-            return rain_grids, calc_data_1h, x_grid, y_grid
+            return rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid
         else:
-            return rain_grids, calc_data_1h, x_grid, y_grid, realtime_runs, last_time
+            return (
+                rain_grids,
+                rain_grids_sum,
+                calc_data_steps,
+                x_grid,
+                y_grid,
+                realtime_runs,
+                last_time,
+            )
 
     except BaseException as error:
         logger.error(

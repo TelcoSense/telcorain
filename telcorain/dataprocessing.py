@@ -83,6 +83,19 @@ def load_data_from_influxdb(
                         # Fallback if CNN constant cannot be imported
                         pass
 
+                # ------------------------------------------------------------
+                # Add extra warmup for 1-hour rolling sum (hour_sum feature)
+                # ------------------------------------------------------------
+                hs_cfg = config.get("hour_sum", {})
+                if bool(hs_cfg.get("enabled", False)):
+                    ts = int(config["time"]["output_step"])  # minutes, e.g. 10
+                    win_min = int(hs_cfg.get("window_minutes", 60))
+                    if ts > 0 and win_min > 0:
+                        win_steps = int(round(win_min / ts))
+                        # need (win_steps-1) frames before first output to have full sum
+                        hour_sum_warmup = max(0, win_steps - 1)
+                        warmup_samples = max(int(warmup_samples or 0), hour_sum_warmup)
+
                 if warmup_samples <= 0:
                     warmup_samples = None
 

@@ -29,11 +29,15 @@ configs/*.ini
 *.log.*
 
 # Output directories
-outputs_web/
-outputs_cml/
-outputs_meteo/
-outputs_raw/
 saved_grids/
+outputs/
+outputs_raw/
+outputs_web/
+outputs_center/
+outputs_sum/
+outputs_historic/
+outputs_json/
+outputs_sum_json/
 
 # OS
 .DS_Store
@@ -42,9 +46,4 @@ Thumbs.db
 # Custom
 /configs/config.ini
 /image_cache
-/outputs_raw
-/outputs_web
-/outputs_center
 /logs
-/outputs_historic
-/outputs_json

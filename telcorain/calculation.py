@@ -54,6 +54,7 @@ class Calculation:
 
         # persistent grids/state
         self.rain_grids: list[np.ndarray] = []
+        self.rain_grids_sum: list[np.ndarray] = []
         self.x_grid: Optional[np.ndarray] = None
         self.y_grid: Optional[np.ndarray] = None
         self.calc_data_steps: Optional[xr.Dataset] = None
@@ -139,6 +140,7 @@ class Calculation:
             if not self.is_historic:
                 (
                     self.rain_grids,
+                    self.rain_grids_sum,
                     self.calc_data_steps,
                     self.x_grid,
                     self.y_grid,
@@ -148,6 +150,7 @@ class Calculation:
             else:
                 (
                     self.rain_grids,
+                    self.rain_grids_sum,
                     self.calc_data_steps,
                     self.x_grid,
                     self.y_grid,

@@ -1,6 +1,12 @@
 import warnings
 from datetime import datetime
 
+warnings.filterwarnings(
+    "ignore",
+    message=r".*pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
+
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
 from telcorain.handlers import logger
@@ -67,6 +73,7 @@ def run_hist_calc(cfg: dict):
         x_grid=calculation.x_grid,
         y_grid=calculation.y_grid,
         calc_dataset=calculation.calc_data_steps,
+        rain_grids_sum=calculation.rain_grids_sum,
     )
 
 
@@ -96,8 +103,12 @@ if __name__ == "__main__":
         },
         "interp": {
             "idw_power": 2,
-            "idw_near": 8,
-            "idw_dist_m": 30000.0,
+            "idw_near": 12,
+            "idw_dist_m": 20000.0,
+        },
+        "hour_sum": {
+            "enabled": True,
+            "write_influx": True,
         },
         "rendering": {
             "is_crop_enabled": True,

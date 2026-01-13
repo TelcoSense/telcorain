@@ -168,8 +168,8 @@ class TelcorainCLI:
             x_grid=calculation.x_grid,
             y_grid=calculation.y_grid,
             calc_dataset=calculation.calc_data_steps,
+            rain_grids_sum=calculation.rain_grids_sum,
         )
-
         self.logger.info("RUN ends. Next iteration should start at: %s.", next_time)
         self.logger.info(
             "Final time of calculation: %s",
@@ -203,8 +203,8 @@ class TelcorainCLI:
             f"Retention window: {self.config['realtime']['retention_window']}",
         ]
 
-        logger.info("Global config settings: " + "; ".join(config_info))
-        logger.info("Calculation settings: " + "; ".join(calc_info))
+        logger.debug("Global config settings: " + "; ".join(config_info))
+        logger.debug("Calculation settings: " + "; ".join(calc_info))
 
     def _get_times(self) -> tuple[datetime, datetime, datetime]:
         """Get current, next, and since times for calculation."""

@@ -8,20 +8,28 @@ end=2024-09-19T12:30:00
 [setting]
 repetition_interval=600
 sleep_interval=30
+output_json_info=True
 
 [logging]
 init_level=INFO
 
 [directories]
 logs=./logs
-outputs=./outputs
-outputs_web=./outputs_web
-outputs_raw=./outputs_raw
-outputs_json=./outputs_json
+outputs=outputs
+outputs_web=outputs_web
+outputs_raw=outputs_raw
+outputs_json=outputs_json
+outputs_sum=outputs_sum
+outputs_sum_json=outputs_sum_json
 clean_web=False
 clean_raw=True
 save_web=True
 save_raw=False
+
+[hour_sum]
+enabled=false
+window_minutes=60
+write_influx=false
 
 # database settings
 [influx2]
@@ -52,7 +60,6 @@ exclude_cmls=True
 [realtime]
 realtime_timewindow=1d
 retention_window=7d
-output_json_info=True
 skip_influx_write=True
 
 [historic]
@@ -87,8 +94,6 @@ idw_dist_m=20000.0
 
 [raingrids]
 min_rain_value=0.1
-is_only_overall=False
-is_output_total=False
 overall_intensity_ref=20 
 overall_intensity_method=coverage ; mean / p90 / p95 or coverage_strength / coverage
 overall_intensity_threshold=0

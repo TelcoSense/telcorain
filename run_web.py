@@ -3,6 +3,12 @@ import json
 import warnings
 from datetime import datetime
 
+warnings.filterwarnings(
+    "ignore",
+    message=r".*pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
+
 from telcorain.calculation import Calculation
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
@@ -65,6 +71,7 @@ def run_hist_calc(cfg: dict):
         x_grid=calculation.x_grid,
         y_grid=calculation.y_grid,
         calc_dataset=calculation.calc_data_steps,
+        rain_grids_sum=calculation.rain_grids_sum,
     )
 
 
