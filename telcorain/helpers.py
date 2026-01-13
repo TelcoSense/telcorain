@@ -523,3 +523,108 @@ def measure_time(func):
         return result
 
     return wrapper
+
+
+def verify_hour_sum(calc_dataset, dt_minutes=10, n_links=10, n_times=10, seed=0):
+    # debug function to check if hour sum logic is correct
+    if "R" not in calc_dataset.data_vars:
+        raise RuntimeError("calc_dataset missing R")
+    if "R_hour_sum" not in calc_dataset.data_vars:
+        raise RuntimeError("calc_dataset missing R_hour_sum")
+
+    N = int(round(60 / dt_minutes))
+    dt_hours = dt_minutes / 60.0
+
+    R_da = calc_dataset["R"]
+    HS_da = calc_dataset["R_hour_sum"]
+
+    # Normalize R to (T,C): your dims are ('cml_id','channel_id','time')
+    R_time_first = R_da.transpose("time", "cml_id", "channel_id").values  # (T,C,Ch)
+    R_mmph = np.nanmean(R_time_first, axis=2)  # (T,C)
+
+    # Normalize hour-sum to (T,C)
+    if "channel_id" in HS_da.dims:
+        HS_time_first = HS_da.transpose(
+            "time", "cml_id", "channel_id"
+        ).values  # (T,C,Ch)
+        HS_mm = np.nanmean(HS_time_first, axis=2)  # (T,C)
+    else:
+        HS_mm = HS_da.transpose("time", "cml_id").values  # (T,C)
+
+    T, C = R_mmph.shape
+    if T < N:
+        print(f"Not enough timesteps for a full {N}-step window. T={T}")
+        return
+
+    # Compute expected hour-sum (mm) for all (t,c) where full window exists
+    expected_hs = np.full((T, C), np.nan, dtype=float)
+    for t in range(N - 1, T):
+        expected_hs[t, :] = np.nansum(R_mmph[t - (N - 1) : t + 1, :] * dt_hours, axis=0)
+
+    # Keep only "wet" cases for verification
+    wet_mask = np.isfinite(expected_hs) & (expected_hs > 0.0)
+    wet_idx = np.argwhere(wet_mask)  # rows: [t, c]
+
+    if wet_idx.size == 0:
+        print("No wet (expected > 0) hour-sum windows found. Nothing to verify.")
+        return
+
+    rng = np.random.default_rng(seed)
+
+    # Sample wet pairs, then derive unique links and times from them
+    n_pairs = min(wet_idx.shape[0], n_links * n_times)
+    pick = wet_idx[rng.choice(wet_idx.shape[0], size=n_pairs, replace=False)]
+
+    # Prefer diversity: cap unique links and times
+    picked_links = []
+    picked_times = []
+    for t, c in pick:
+        if c not in picked_links and len(picked_links) < min(n_links, C):
+            picked_links.append(int(c))
+        if t not in picked_times and len(picked_times) < min(n_times, T - (N - 1)):
+            picked_times.append(int(t))
+        if len(picked_links) >= min(n_links, C) and len(picked_times) >= min(
+            n_times, T - (N - 1)
+        ):
+            break
+
+    # Fallback if diversity selection ended up too small
+    if len(picked_links) == 0:
+        picked_links = [int(pick[0, 1])]
+    if len(picked_times) == 0:
+        picked_times = [int(pick[0, 0])]
+
+    max_abs = 0.0
+    checked = 0
+
+    for c in picked_links:
+        for t in picked_times:
+            if t < (N - 1):
+                continue
+
+            window = R_mmph[t - (N - 1) : t + 1, c]  # N values in mm/h
+            expected = np.nansum(window * dt_hours)  # mm
+            if not (np.isfinite(expected) and expected > 0.0):
+                continue  # enforce wet-only
+
+            got = HS_mm[t, c]
+
+            if np.isfinite(got):
+                diff = abs(expected - got)
+                max_abs = max(max_abs, diff)
+            else:
+                diff = np.nan
+
+            print(
+                f"cml_idx={c} t_idx={t}: expected={expected:.6f} mm  got={got:.6f} mm  diff={diff}"
+            )
+            checked += 1
+
+    if checked == 0:
+        print(
+            "No wet cases remained after sampling constraints. Increase n_links/n_times or lower constraints."
+        )
+        return
+
+    print("Checked wet cases:", checked)
+    print("Max abs diff:", max_abs)

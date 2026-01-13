@@ -19,7 +19,7 @@ from xarray import Dataset
 
 from telcorain.cython.raincolor import rain_to_rgba
 from telcorain.handlers import logger
-from telcorain.helpers import dt64_to_unixtime, save_ndarray_to_file
+from telcorain.helpers import dt64_to_unixtime, save_ndarray_to_file, verify_hour_sum
 
 
 class Writer:
@@ -138,39 +138,65 @@ class Writer:
     # PNG WRITER
     # ------------------------------------------------------------------
 
-    def _compute_overall_intensity(self, grid: np.ndarray) -> float:
-        """Compute a single 0..1 intensity value from a rain grid (mm/h)."""
+    def _compute_overall_intensity(
+        self,
+        grid: np.ndarray,
+        mode: str = "intensity",
+        window_minutes: float = 60.0,
+    ) -> float:
+        """
+        Compute a single 0..1 'overall' score using the SAME [raingrids] parameters.
+
+        mode="intensity": grid is mm/h (no conversion)
+        mode="hour_sum":  grid is mm accumulated over `window_minutes`,
+                        converted internally to mm/h so existing thresholds/ref remain valid.
+        """
         if grid is None:
             return 0.0
+
         valid = np.asarray(grid, dtype=float)
         if valid.size == 0:
             return 0.0
 
-        method = self.overall_intensity_method
+        # Convert hour-sum (mm over window) to mm/h so we can reuse the same scoring params
+        if mode == "hour_sum":
+            win_h = float(window_minutes) / 60.0
+            if win_h <= 0:
+                win_h = 1.0
+            valid = valid / win_h  # mm -> mm/h equivalent
+
+        method = str(self.overall_intensity_method).lower()
+        threshold = float(self.overall_intensity_threshold)
+        ref = float(self.overall_intensity_ref)
+        cg = float(self.overall_intensity_coverage_gamma)
+        sg = float(self.overall_intensity_strength_gamma)
 
         if method in {"coverage", "coverage_strength"}:
             finite = np.isfinite(valid)
             denom = int(np.count_nonzero(finite))
             if denom == 0:
                 return 0.0
-            wet = finite & (valid > self.overall_intensity_threshold)
+
+            wet = finite & (valid > threshold)
             coverage = float(np.count_nonzero(wet)) / float(denom)
+
             if method == "coverage":
                 return float(min(1.0, max(0.0, coverage)))
 
             wet_vals = valid[wet]
             if wet_vals.size == 0:
                 return 0.0
+
             stat = float(np.nanmean(wet_vals))
             if not math.isfinite(stat) or stat <= 0:
                 return 0.0
 
-            ref = max(self.overall_intensity_ref, 1e-6)
+            ref = max(ref, 1e-6)
             strength = math.log1p(stat) / math.log1p(ref)
             strength = float(min(1.0, max(0.0, strength)))
 
-            cg = max(self.overall_intensity_coverage_gamma, 1e-6)
-            sg = max(self.overall_intensity_strength_gamma, 1e-6)
+            cg = max(cg, 1e-6)
+            sg = max(sg, 1e-6)
             score = (coverage**cg) * (strength**sg)
             return float(min(1.0, max(0.0, score)))
 
@@ -184,7 +210,7 @@ class Writer:
         if not math.isfinite(stat) or stat <= 0:
             return 0.0
 
-        ref = max(self.overall_intensity_ref, 1e-6)
+        ref = max(ref, 1e-6)
         score = math.log1p(stat) / math.log1p(ref)
         return float(min(1.0, max(0.0, score)))
 
@@ -290,7 +316,7 @@ class Writer:
             if self.is_crop_enabled:
                 grid = np.where(self.static_mask, grid, np.nan)
 
-            overall = self._compute_overall_intensity(grid)
+            overall = self._compute_overall_intensity(grid, mode="hour_sum")
 
             R = time_slice["R"].isel(time=i).values
             any_link_wet = bool((R > 0).any())
