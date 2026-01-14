@@ -16,7 +16,6 @@ def _to_float(val, default):
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
-        # remove inline comments starting with ';' or '#'
         for sep in (";", "#"):
             val = val.split(sep, 1)[0]
         val = val.strip()
@@ -38,6 +37,7 @@ def generate_rainfields(
     calc_data: list[xr.Dataset],
     config: dict[str, Any],
     rain_grids: list[np.ndarray],
+    rain_grids_sum: Optional[list[np.ndarray]] = None,
     *,
     is_historic: bool = False,
     realtime_runs: int = 1,
@@ -45,21 +45,24 @@ def generate_rainfields(
     log_run_id: str = "default",
 ):
     """
-    Historic mode:
-      - ignore realtime_runs, last_time
-      - does NOT delete old frames
-      - does NOT return realtime_runs or last_time
+    Generates spatial rainfields for:
+      - normal intensity grids (mm/h), always
+      - hour-sum grids (mm), only when config["hour_sum"]["enabled"] is True
 
-    Realtime mode:
-      - keeps original deletion of first N frames where needed
-      - returns realtime_runs and last_time
+    Realtime behavior (important):
+      - recomputes the whole window every call (e.g. 144 frames)
+      - keeps ONLY the last T frames in rain_grids and rain_grids_sum,
+        where T == len(calc_data_steps.time) for this call
+      - this matches the "sliding window" behavior of the normal pipeline
 
     Return values:
        Realtime:
-          (rain_grids, calc_data_steps, x_grid, y_grid, realtime_runs, last_time)
+          (rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid, realtime_runs, last_time)
        Historic:
-          (rain_grids, calc_data_steps, x_grid, y_grid)
+          (rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid)
     """
+    if rain_grids_sum is None:
+        rain_grids_sum = []
 
     try:
         logger.info("[%s] Generating rainfields...", log_run_id)
@@ -67,9 +70,16 @@ def generate_rainfields(
         if not calc_data:
             logger.warning("[%s] Empty calc_data, nothing to interpolate.", log_run_id)
             if is_historic:
-                return rain_grids, None, None, None
-            else:
-                return rain_grids, None, None, None, realtime_runs, last_time
+                return rain_grids, rain_grids_sum, None, None, None
+            return (
+                rain_grids,
+                rain_grids_sum,
+                None,
+                None,
+                None,
+                realtime_runs,
+                last_time,
+            )
 
         # ------------------------------------------------------------------
         # 0) Concatenate all links once and precompute geometry
@@ -80,17 +90,14 @@ def generate_rainfields(
         interp_cfg = config["interp"]
         limits = config["limits"]
 
-        # Use Mercator or plain lon/lat?
         use_mercator = bool(interp_cfg.get("use_mercator", False))
         transformer: Optional[Transformer] = None
         if use_mercator:
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
-        # Compute geographic centers (deg)
         lat_center = (ds_all.site_a_latitude + ds_all.site_b_latitude) / 2
         lon_center = (ds_all.site_a_longitude + ds_all.site_b_longitude) / 2
 
-        # Convert all link centers to grid CRS *before interpolation*
         if use_mercator:
             x_sites, y_sites = transformer.transform(
                 lon_center.values.astype(float),
@@ -100,16 +107,13 @@ def generate_rainfields(
             x_sites = lon_center.values.astype(float)
             y_sites = lat_center.values.astype(float)
 
-        # Attach back to dataset to keep compatibility if something needs it
         ds_all = ds_all.assign(x_center=("cml_id", x_sites))
         ds_all = ds_all.assign(y_center=("cml_id", y_sites))
 
         # ------------------------------------------------------------------
         # 1) Create IDW interpolator & target grid
         # ------------------------------------------------------------------
-        # Grid coordinates
         if use_mercator:
-            # limits are in lon/lat (deg) -> transform to metres
             x_min_deg = float(limits["x_min"])
             x_max_deg = float(limits["x_max"])
             y_min_deg = float(limits["y_min"])
@@ -121,7 +125,6 @@ def generate_rainfields(
             x_lo, x_hi = sorted([x_min_m, x_max_m])
             y_lo, y_hi = sorted([y_min_m, y_max_m])
 
-            # Grid size to match CHMI
             nx_cfg = interp_cfg.get("grid_nx", None)
             ny_cfg = interp_cfg.get("grid_ny", None)
 
@@ -139,12 +142,9 @@ def generate_rainfields(
                     dy,
                 )
             else:
-                # Fallback: use grid_step_m (approximate 1 km)
                 step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
                 nx = int(np.round((x_hi - x_lo) / step_m))
                 ny = int(np.round((y_hi - y_lo) / step_m))
-
-                # Recompute dx, dy from integer pixel counts
                 dx = (x_hi - x_lo) / nx
                 dy = (y_hi - y_lo) / ny
                 logger.debug(
@@ -157,7 +157,6 @@ def generate_rainfields(
                     dy,
                 )
 
-            # Pixel centers
             x_coords = x_lo + (np.arange(nx) + 0.5) * dx
             y_coords = y_lo + (np.arange(ny) + 0.5) * dy
 
@@ -188,9 +187,7 @@ def generate_rainfields(
                 dx,
                 dy,
             )
-
         else:
-            # Or use lon/lat grid in degrees
             x_coords = np.arange(
                 _to_float(limits["x_min"], limits["x_min"]),
                 _to_float(limits["x_max"], limits["x_max"]),
@@ -204,20 +201,16 @@ def generate_rainfields(
 
         x_grid, y_grid = np.meshgrid(x_coords, y_coords)
 
-        # Site coordinates in the same CRS as the grid
         x_sites = ds_all.x_center.values
         y_sites = ds_all.y_center.values
 
-        # IDW parameters
         nnear = int(interp_cfg["idw_near"])
         p = _to_float(interp_cfg["idw_power"], interp_cfg["idw_power"])
 
         if use_mercator:
-            max_distance = _to_float(
-                interp_cfg.get("idw_dist_m", 20000.0), 20000.0
-            )  # metres
+            max_distance = _to_float(interp_cfg.get("idw_dist_m", 20000.0), 20000.0)
         else:
-            max_distance = _to_float(interp_cfg.get("idw_dist", 0.4), 0.4)  # degrees
+            max_distance = _to_float(interp_cfg.get("idw_dist", 0.4), 0.4)
 
         interpolator = IdwKdtreeInterpolator(
             nnear=nnear,
@@ -232,50 +225,46 @@ def generate_rainfields(
         # ------------------------------------------------------------------
         # 2) Time-step rainfall fields for animation
         # ------------------------------------------------------------------
-        ts = config["time"]["output_step"]  # [minutes]
-        base_step = config["time"]["step"]  # [minutes]
+        ts = int(config["time"]["output_step"])  # minutes
+        base_step = int(config["time"]["step"])  # minutes
 
         if ts == 60:
-            # use 1h resample
             calc_data_steps = calc_data_1h
         elif ts > base_step:
-            # resample from base ds_all to desired step
             calc_data_steps = (
                 ds_all.R.resample(time=f"{ts}T", label="right").mean().to_dataset()
             )
         elif ts == base_step:
-            # use base-resolution data as is
             calc_data_steps = ds_all
         else:
             raise ValueError("Invalid value of output_step")
 
         logger.debug(
-            "[%s] Interpolating spatial data for rainfall animation maps...",
-            log_run_id,
+            "[%s] Interpolating spatial data for rainfall animation maps...", log_run_id
         )
 
-        # Precompute z(t) as NumPy for fast looping
-        # shape: (cml_id, time)
-        z_all = calc_data_steps.R.mean(dim="channel_id").values
+        # z_all shape depends on calc_data_steps:
+        # - ds_all: (cml_id, channel_id, time) -> after mean(channel_id): (cml_id, time)
+        # - resampled dataset: same
+        z_all = calc_data_steps.R.mean(dim="channel_id").values  # (cml_id, time)
         times = calc_data_steps.time.values
-        min_rain = config["raingrids"]["min_rain_value"]
+        min_rain = float(config["raingrids"]["min_rain_value"])
 
-        # prepare hour sum computation
-        rain_grids_sum: list[np.ndarray] = []
+        # ------------------------------------------------------------------
+        # 2b) Hour-sum computation on link-series (before spatial interpolation)
+        # ------------------------------------------------------------------
         hs_cfg = config.get("hour_sum", {})
         hour_sum_enabled = bool(hs_cfg.get("enabled", False))
         hour_sum_win_min = int(hs_cfg.get("window_minutes", 60))
 
         if hour_sum_enabled:
-            dt_hours = ts / 60.0
-            # convert mm/h -> mm per step
-            z_step_mm = z_all * dt_hours
+            dt_hours = float(ts) / 60.0  # per-step duration in hours
+            z_step_mm = z_all * dt_hours  # mm/h -> mm per step
 
             win_steps = int(round(hour_sum_win_min / ts))
             if win_steps < 1:
                 win_steps = 1
 
-            # rolling sum over time axis (axis=1), strict full window
             z_hour_sum_all = np.full_like(z_step_mm, np.nan, dtype=float)
             logger.debug(
                 "[%s] hour_sum: ts=%d min, win_steps=%d, first_valid_index=%d",
@@ -284,19 +273,23 @@ def generate_rainfields(
                 win_steps,
                 win_steps - 1,
             )
+
             for j in range(win_steps - 1, z_step_mm.shape[1]):
                 z_hour_sum_all[:, j] = np.nansum(
                     z_step_mm[:, j - win_steps + 1 : j + 1], axis=1
                 )
 
-            # attach into dataset (dims must match calc_data_steps: cml_id, time)
+            # attach to dataset for downstream (writer + verification)
             calc_data_steps["R_hour_sum"] = (("cml_id", "time"), z_hour_sum_all)
         else:
             z_hour_sum_all = None
 
-        grids_to_del = 0
+        # ------------------------------------------------------------------
+        # 2c) Spatial interpolation for each time step
+        # ------------------------------------------------------------------
+        T = int(z_all.shape[1])  # current window length
 
-        for i in range(z_all.shape[1]):
+        for i in range(T):
             z_t = z_all[:, i]
 
             grid = interpolator(
@@ -309,7 +302,6 @@ def generate_rainfields(
             grid[grid < min_rain] = 0.0
             rain_grids.append(grid)
 
-            # hour sum computation
             if hour_sum_enabled and z_hour_sum_all is not None:
                 zsum_t = z_hour_sum_all[:, i]
                 grid_sum = interpolator(
@@ -319,37 +311,40 @@ def generate_rainfields(
                     xgrid=x_grid,
                     ygrid=y_grid,
                 )
-                # zero small values
                 grid_sum[~np.isfinite(grid_sum)] = np.nan
                 grid_sum[grid_sum < 0.0] = 0.0
                 rain_grids_sum.append(grid_sum)
 
             if not is_historic:
                 last_time = times[i]
-                if realtime_runs > 1:
-                    grids_to_del += 1
-
-        # maintain sliding window
-        if not is_historic and grids_to_del > 0:
-            del rain_grids[:grids_to_del]
-            if rain_grids_sum is not None:
-                del rain_grids_sum[:grids_to_del]
 
         # ------------------------------------------------------------------
-        # 3) Return in the original shapes
+        # 2d) Realtime: trim lists to exactly this window length (fixes sum becoming [])
+        # ------------------------------------------------------------------
+        if not is_historic:
+            excess = len(rain_grids) - T
+            if excess > 0:
+                del rain_grids[:excess]
+
+            excess_sum = len(rain_grids_sum) - T
+            if excess_sum > 0:
+                del rain_grids_sum[:excess_sum]
+
+        # ------------------------------------------------------------------
+        # 3) Return
         # ------------------------------------------------------------------
         if is_historic:
             return rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid
-        else:
-            return (
-                rain_grids,
-                rain_grids_sum,
-                calc_data_steps,
-                x_grid,
-                y_grid,
-                realtime_runs,
-                last_time,
-            )
+
+        return (
+            rain_grids,
+            rain_grids_sum,
+            calc_data_steps,
+            x_grid,
+            y_grid,
+            realtime_runs,
+            last_time,
+        )
 
     except BaseException as error:
         logger.error(

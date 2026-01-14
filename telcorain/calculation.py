@@ -131,6 +131,7 @@ class Calculation:
                 calc_data=calc_data,
                 config=self.config,
                 rain_grids=self.rain_grids,
+                rain_grids_sum=self.rain_grids_sum,
                 is_historic=self.is_historic,
                 realtime_runs=self.realtime_runs,
                 last_time=self.last_time,
