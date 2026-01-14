@@ -33,7 +33,7 @@ class Writer:
     def __init__(
         self,
         influx_man,
-        skip_influx: bool,
+        write_influx_intensities: bool,
         config: dict,
         since_time: Optional[datetime] = None,
         is_historic: bool = False,
@@ -41,7 +41,7 @@ class Writer:
         influx_wipe_thread: Optional[Thread] = None,
     ):
         self.influx_man = influx_man
-        self.skip_influx = skip_influx  # controls NORMAL 10-min influx writing only
+        self.write_influx_intensities = write_influx_intensities  # controls NORMAL 10-min influx writing only, not sum
         self.config = config
         self.is_historic = is_historic
         self.influx_wipe_thread = influx_wipe_thread
@@ -437,7 +437,7 @@ class Writer:
     def _write_timeseries_intensity_realtime(
         self, calc_dataset: Dataset, np_since_time
     ):
-        """Write NORMAL 10-min intensity (mm/h). Controlled by self.skip_influx."""
+        """Write NORMAL 10-min intensity (mm/h)."""
         filtered = calc_dataset.where(calc_dataset.time > np_since_time).dropna(
             dim="time", how="all"
         )
@@ -461,7 +461,7 @@ class Writer:
         self.influx_man.write_points(points, self.influx_man.BUCKET_OUT_CML)
 
     def _write_timeseries_intensity_historic(self, calc_dataset: Dataset):
-        """Write NORMAL 10-min intensity (mm/h). Controlled by self.skip_influx."""
+        """Write NORMAL 10-min intensity (mm/h)."""
         points = []
         for c in range(calc_dataset.cml_id.size):
             csl = calc_dataset.isel(cml_id=c)
@@ -481,8 +481,8 @@ class Writer:
         self.influx_man.write_points(points, self.influx_man.BUCKET_OUT_CML)
 
     def _write_timeseries_hour_sum_realtime(self, calc_dataset: Dataset, np_since_time):
-        """Write hour-sum (mm). Controlled ONLY by config [hour_sum].write_influx."""
-        if not bool(self.config.get("hour_sum", {}).get("write_influx", False)):
+        """Write hour-sum (mm). Controlled ONLY by config [hour_sum].write_influx_sum."""
+        if not bool(self.config.get("hour_sum", {}).get("write_influx_sum", False)):
             return
         if "R_hour_sum" not in calc_dataset.data_vars:
             return
@@ -518,8 +518,8 @@ class Writer:
             self.influx_man.write_points(points, self.influx_man.BUCKET_OUT_CML)
 
     def _write_timeseries_hour_sum_historic(self, calc_dataset: Dataset):
-        """Write hour-sum (mm). Controlled ONLY by config [hour_sum].write_influx."""
-        if not bool(self.config.get("hour_sum", {}).get("write_influx", False)):
+        """Write hour-sum (mm). Controlled ONLY by config [hour_sum].write_influx_sum."""
+        if not bool(self.config.get("hour_sum", {}).get("write_influx_sum", False)):
             return
         if "R_hour_sum" not in calc_dataset.data_vars:
             return
@@ -607,17 +607,13 @@ class Writer:
 
         # write timeseries
         if self.is_historic:
-            # normal intensity only if skip_influx is False
-            if not self.skip_influx:
+            if self.write_influx_intensities:
                 self._write_timeseries_intensity_historic(calc_dataset)
-            # hour-sum independently from skip_influx
             self._write_timeseries_hour_sum_historic(calc_dataset)
         else:
             np_since = np.datetime64(self.since_time)
-            # normal intensity only if skip_influx is False
-            if not self.skip_influx:
+            if self.write_influx_intensities:
                 self._write_timeseries_intensity_realtime(calc_dataset, np_since)
-            # hour-sum independently from skip_influx
             self._write_timeseries_hour_sum_realtime(calc_dataset, np_since)
 
         self.influx_man.is_manager_locked = False

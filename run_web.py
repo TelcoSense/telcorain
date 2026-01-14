@@ -61,7 +61,7 @@ def run_hist_calc(cfg: dict):
 
     writer = Writer(
         influx_man=influx_man,
-        skip_influx=config["realtime"]["skip_influx_write"],
+        write_influx_intensities=config["setting"]["write_influx_intensities"],
         config=config,
         is_web=True,
     )

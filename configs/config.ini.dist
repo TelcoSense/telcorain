@@ -9,6 +9,7 @@ end=2024-09-19T12:30:00
 repetition_interval=600
 sleep_interval=30
 output_json_info=True
+write_influx_intensities=False
 
 [logging]
 init_level=INFO
@@ -22,14 +23,14 @@ outputs_json=outputs_json
 outputs_sum=outputs_sum
 outputs_sum_json=outputs_sum_json
 clean_web=False
-clean_raw=True
+clean_raw=False
 save_web=True
 save_raw=False
 
 [hour_sum]
-enabled=false
+enabled=False
 window_minutes=60
-write_influx=false
+write_influx_sum=False
 
 # database settings
 [influx2]
@@ -60,7 +61,6 @@ exclude_cmls=True
 [realtime]
 realtime_timewindow=1d
 retention_window=7d
-skip_influx_write=True
 
 [historic]
 compensate_historic=True

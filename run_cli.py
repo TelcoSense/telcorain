@@ -157,7 +157,7 @@ class TelcorainCLI:
         # Writer
         writer = Writer(
             influx_man=self.influx_man,
-            skip_influx=self.config["realtime"]["skip_influx_write"],
+            write_influx_intensities=self.config["setting"]["write_influx_intensities"],
             config=self.config,
             since_time=since_time,
             is_historic=False,
