@@ -10,6 +10,7 @@ repetition_interval=600
 sleep_interval=30
 output_json_info=True
 write_influx_intensities=False
+dry_as_nan=False
 
 [logging]
 init_level=INFO

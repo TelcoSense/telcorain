@@ -49,17 +49,15 @@ def generate_rainfields(
       - normal intensity grids (mm/h), always
       - hour-sum grids (mm), only when config["hour_sum"]["enabled"] is True
 
-    Realtime behavior (important):
-      - recomputes the whole window every call (e.g. 144 frames)
-      - keeps ONLY the last T frames in rain_grids and rain_grids_sum,
-        where T == len(calc_data_steps.time) for this call
-      - this matches the "sliding window" behavior of the normal pipeline
+    Adds option:
+      [setting].dry_as_nan = true
+        - if true, link value == 0 is converted to NaN before interpolation
+        - interpolator has exclude_nan=True so those links are ignored (synth behavior)
+        - this is applied for both mm/h and hour-sum mm series
 
-    Return values:
-       Realtime:
-          (rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid, realtime_runs, last_time)
-       Historic:
-          (rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid)
+    Realtime behavior:
+      - recomputes the whole window every call
+      - trims rain_grids and rain_grids_sum to exactly the current window length T
     """
     if rain_grids_sum is None:
         rain_grids_sum = []
@@ -81,10 +79,9 @@ def generate_rainfields(
                 last_time,
             )
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # 0) Concatenate all links once and precompute geometry
-        # ------------------------------------------------------------------
-        # ds_all has dims: cml_id, channel_id, time
+        # --------------------------------------------------------------
         ds_all = xr.concat(calc_data, dim="cml_id")
 
         interp_cfg = config["interp"]
@@ -110,9 +107,9 @@ def generate_rainfields(
         ds_all = ds_all.assign(x_center=("cml_id", x_sites))
         ds_all = ds_all.assign(y_center=("cml_id", y_sites))
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # 1) Create IDW interpolator & target grid
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         if use_mercator:
             x_min_deg = float(limits["x_min"])
             x_max_deg = float(limits["x_max"])
@@ -219,12 +216,11 @@ def generate_rainfields(
             max_distance=max_distance,
         )
 
-        # 1h resample from concatenated dataset
+        # --------------------------------------------------------------
+        # 2) Time-step rainfall fields for animation
+        # --------------------------------------------------------------
         calc_data_1h = ds_all.R.resample(time="1H", label="right").mean().to_dataset()
 
-        # ------------------------------------------------------------------
-        # 2) Time-step rainfall fields for animation
-        # ------------------------------------------------------------------
         ts = int(config["time"]["output_step"])  # minutes
         base_step = int(config["time"]["step"])  # minutes
 
@@ -243,22 +239,22 @@ def generate_rainfields(
             "[%s] Interpolating spatial data for rainfall animation maps...", log_run_id
         )
 
-        # z_all shape depends on calc_data_steps:
-        # - ds_all: (cml_id, channel_id, time) -> after mean(channel_id): (cml_id, time)
-        # - resampled dataset: same
         z_all = calc_data_steps.R.mean(dim="channel_id").values  # (cml_id, time)
         times = calc_data_steps.time.values
         min_rain = float(config["raingrids"]["min_rain_value"])
 
-        # ------------------------------------------------------------------
+        # synth-like behavior: only 0 becomes NaN, no thresholding on links
+        dry_as_nan = bool(config["setting"]["dry_as_nan"])
+
+        # --------------------------------------------------------------
         # 2b) Hour-sum computation on link-series (before spatial interpolation)
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         hs_cfg = config.get("hour_sum", {})
         hour_sum_enabled = bool(hs_cfg.get("enabled", False))
         hour_sum_win_min = int(hs_cfg.get("window_minutes", 60))
 
         if hour_sum_enabled:
-            dt_hours = float(ts) / 60.0  # per-step duration in hours
+            dt_hours = float(ts) / 60.0
             z_step_mm = z_all * dt_hours  # mm/h -> mm per step
 
             win_steps = int(round(hour_sum_win_min / ts))
@@ -279,18 +275,21 @@ def generate_rainfields(
                     z_step_mm[:, j - win_steps + 1 : j + 1], axis=1
                 )
 
-            # attach to dataset for downstream (writer + verification)
             calc_data_steps["R_hour_sum"] = (("cml_id", "time"), z_hour_sum_all)
         else:
             z_hour_sum_all = None
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # 2c) Spatial interpolation for each time step
-        # ------------------------------------------------------------------
-        T = int(z_all.shape[1])  # current window length
+        # --------------------------------------------------------------
+        T = int(z_all.shape[1])
 
         for i in range(T):
-            z_t = z_all[:, i]
+            # ---- intensity mm/h ----
+            z_t = np.asarray(z_all[:, i], dtype=float).copy()
+
+            if dry_as_nan:
+                z_t[z_t == 0.0] = np.nan
 
             grid = interpolator(
                 x=x_sites,
@@ -299,11 +298,19 @@ def generate_rainfields(
                 xgrid=x_grid,
                 ygrid=y_grid,
             )
+
+            # keep your output convention for intensity maps:
+            # values below min_rain become 0 (and NaNs remain NaN unless you force them)
             grid[grid < min_rain] = 0.0
             rain_grids.append(grid)
 
+            # ---- hour-sum mm ----
             if hour_sum_enabled and z_hour_sum_all is not None:
-                zsum_t = z_hour_sum_all[:, i]
+                zsum_t = np.asarray(z_hour_sum_all[:, i], dtype=float).copy()
+
+                if dry_as_nan:
+                    zsum_t[zsum_t == 0.0] = np.nan
+
                 grid_sum = interpolator(
                     x=x_sites,
                     y=y_sites,
@@ -311,6 +318,8 @@ def generate_rainfields(
                     xgrid=x_grid,
                     ygrid=y_grid,
                 )
+
+                # keep existing behavior: NaN stays NaN, negatives to 0
                 grid_sum[~np.isfinite(grid_sum)] = np.nan
                 grid_sum[grid_sum < 0.0] = 0.0
                 rain_grids_sum.append(grid_sum)
@@ -318,9 +327,9 @@ def generate_rainfields(
             if not is_historic:
                 last_time = times[i]
 
-        # ------------------------------------------------------------------
-        # 2d) Realtime: trim lists to exactly this window length (fixes sum becoming [])
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 2d) Realtime: trim lists to exactly this window length
+        # --------------------------------------------------------------
         if not is_historic:
             excess = len(rain_grids) - T
             if excess > 0:
@@ -330,9 +339,9 @@ def generate_rainfields(
             if excess_sum > 0:
                 del rain_grids_sum[:excess_sum]
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # 3) Return
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         if is_historic:
             return rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid
 

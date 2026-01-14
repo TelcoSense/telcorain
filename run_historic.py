@@ -87,6 +87,9 @@ if __name__ == "__main__":
             "start": datetime(2023, 10, 13, 6, 30, tzinfo=None),
             "end": datetime(2023, 10, 13, 10, 30, tzinfo=None),
         },
+        "setting": {
+            "dry_as_nan": False,
+        },
         # CML filtering
         "cml": {"min_length": 0.5, "max_length": 100, "exclude_cmls": False},
         # user info for folder names and link selection (list of IDs)
