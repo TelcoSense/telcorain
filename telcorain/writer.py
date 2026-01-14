@@ -19,7 +19,14 @@ from xarray import Dataset
 
 from telcorain.cython.raincolor import rain_to_rgba
 from telcorain.handlers import logger
-from telcorain.helpers import dt64_to_unixtime, save_ndarray_to_file, verify_hour_sum
+from telcorain.helpers import (
+    dt64_to_unixtime,
+    save_ndarray_to_file,
+    _hex_to_rgba_u8,
+    rain_to_rgba_custom,
+    get_rain_sum_colors,
+    verify_hour_sum,
+)
 
 
 class Writer:
@@ -99,6 +106,12 @@ class Writer:
         else:
             self.transform_fwd = None
             self.transform_back = None
+
+        self.hs_palette = get_rain_sum_colors()
+        levels_sorted = sorted(self.hs_palette.keys())
+        cols_sorted = [self.hs_palette[k] for k in levels_sorted]
+        self.hs_levels = np.asarray(levels_sorted, dtype=float)
+        self.hs_colors = np.stack([_hex_to_rgba_u8(c) for c in cols_sorted], axis=0)
 
     # ------------------------------------------------------------------
     # POLYGON MASKING
@@ -326,7 +339,8 @@ class Writer:
 
             png_path = f"{self.outputs_sum_dir}/{fname}_{overall_str}.png"
 
-            rgba = rain_to_rgba(grid)
+            rgba = rain_to_rgba_custom(grid, self.hs_levels, self.hs_colors)
+
             rgba = np.flipud(rgba)
             Image.fromarray(rgba, "RGBA").save(png_path)
 

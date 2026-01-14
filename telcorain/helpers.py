@@ -104,6 +104,27 @@ class MwLink:
         self.dummy_longitude_b = dummy_longitude_b
 
 
+def get_rain_sum_colors():
+    return {
+        0.0: "#00000000",
+        0.1: "#370070",
+        0.3: "#2e02a5",
+        0.6: "#0001fc",
+        1.0: "#006dbd",
+        2.0: "#00a000",
+        4.0: "#00bb02",
+        6.0: "#35d700",
+        10.0: "#9fdb00",
+        15.0: "#dfdd00",
+        20.0: "#fcb100",
+        30.0: "#fb8500",
+        40.0: "#ff5700",
+        60.0: "#fc0000",
+        80.0: "#9f0100",
+        100.0: "#fdfbfd",
+    }
+
+
 @njit(parallel=True, fastmath=True)
 def bbox_mask_numba(xgrid, ygrid, minx, miny, maxx, maxy):
     rows, cols = xgrid.shape
@@ -191,6 +212,65 @@ def mask_grid(
     return data_grid
 
 
+def _hex_to_rgba_u8(h: str) -> np.ndarray:
+    h = h.strip()
+    if h.startswith("#"):
+        h = h[1:]
+    if len(h) == 6:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        a = 255
+    elif len(h) == 8:
+        r, g, b, a = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16)
+    else:
+        raise ValueError(f"Invalid hex color: {h}")
+    return np.array([r, g, b, a], dtype=np.uint8)
+
+
+def rain_to_rgba_custom(
+    grid: np.ndarray, levels: np.ndarray, colors_rgba_u8: np.ndarray
+) -> np.ndarray:
+    """
+    grid: (ny,nx) float with NaNs
+    levels: (K,) increasing breakpoints
+    colors_rgba_u8: (K,4) uint8 RGBA colors at each breakpoint
+    Returns: (ny,nx,4) uint8
+    """
+    z = np.asarray(grid, dtype=float)
+    ny, nx = z.shape
+    out = np.zeros((ny, nx, 4), dtype=np.uint8)
+
+    finite = np.isfinite(z)
+    if not finite.any():
+        return out  # all transparent
+
+    # clamp to [levels[0], levels[-1]]
+    zc = z.copy()
+    zc[~finite] = levels[0]
+    zc = np.clip(zc, levels[0], levels[-1])
+
+    # bin index i such that levels[i] <= z < levels[i+1]
+    idx = np.searchsorted(levels, zc, side="right") - 1
+    idx = np.clip(idx, 0, len(levels) - 2)
+
+    l0 = levels[idx]
+    l1 = levels[idx + 1]
+    # avoid division by zero if two levels equal
+    denom = l1 - l0
+    denom[denom == 0] = 1.0
+    t = (zc - l0) / denom  # 0..1 inside the interval
+
+    c0 = colors_rgba_u8[idx]  # (ny,nx,4)
+    c1 = colors_rgba_u8[idx + 1]  # (ny,nx,4)
+
+    # linear interpolation in float then cast to u8
+    cf = (1.0 - t)[..., None] * c0.astype(float) + t[..., None] * c1.astype(float)
+    out[finite] = np.round(cf[finite]).astype(np.uint8)
+
+    # make NaNs fully transparent
+    out[~finite, 3] = 0
+    return out
+
+
 def rain_to_rgba(grid: np.ndarray) -> np.ndarray:
     """
     Vectorized conversion of a rainfall (mm/h) grid to RGBA image.
@@ -234,89 +314,6 @@ def ndarray_to_png(array: np.ndarray, output_path: str):
     rgba = np.flipud(rgba)
     img = Image.fromarray(rgba, mode="RGBA")
     img.save(output_path, "PNG")
-
-
-# def _get_rain_color(value: float) -> tuple[int, int, int, int]:
-#     """
-#     Get RGBA color tuple based on the rain intensity value.
-#     The color scale is identical to the CHMI rain scale colorbar. The rain intensity values are in mm/h, the scale is
-#     derived from the CHMI radar scale, where dBZ have been converted to mm/h using the Marshall-Palmer formula:
-#     https://rdrr.io/github/potterzot/kgRainPredictR/man/marshall_palmer.html
-
-#     [dBZ]  [mm/h]    [RGBA]
-#     4      0.064842  (57, 0, 112, 255)
-#     8      0.115307  (47, 1, 169, 255)
-#     12     0.205048  (0, 0, 252, 255)
-#     16     0.364633  (0, 108, 192, 255)
-#     20     0.648420  (0, 160, 0, 255)
-#     24     1.153072  (0, 188, 0, 255)
-#     28     2.050483  (52, 216, 0, 255)
-#     32     3.646332  (156, 220, 0, 255)
-#     36     6.484198  (224, 220, 0, 255)
-#     40     11.53072  (252, 176, 0, 255)
-#     44     20.50483  (252, 132, 0, 255)
-#     48     36.46332  (252, 88, 0, 255)
-#     52     64.84198  (252, 0, 0, 255)
-#     56     115.3072  (160, 0, 0, 255)
-
-#     :param value: rain intensity value
-#     :return: RGBA color tuple, NaN and values below 0.1 are transparent
-#     """
-#     if np.isnan(value) or value < 0.1:
-#         return 0, 0, 0, 0  # transparent
-#     elif 0.1 <= value < 0.115307:
-#         return 57, 0, 112, 255
-#     elif 0.115307 <= value < 0.205048:
-#         return 47, 1, 169, 255
-#     elif 0.205048 <= value < 0.364633:
-#         return 0, 0, 252, 255
-#     elif 0.364633 <= value < 0.648420:
-#         return 0, 108, 192, 255
-#     elif 0.648420 <= value < 1.153072:
-#         return 0, 160, 0, 255
-#     elif 1.153072 <= value < 2.050483:
-#         return 0, 188, 0, 255
-#     elif 2.050483 <= value < 3.646332:
-#         return 52, 216, 0, 255
-#     elif 3.646332 <= value < 6.484198:
-#         return 156, 220, 0, 255
-#     elif 6.484198 <= value < 11.53072:
-#         return 224, 220, 0, 255
-#     elif 11.53072 <= value < 20.50483:
-#         return 252, 176, 0, 255
-#     elif 20.50483 <= value < 36.46332:
-#         return 252, 132, 0, 255
-#     elif 36.46332 <= value < 64.84198:
-#         return 252, 88, 0, 255
-#     elif 64.84198 <= value < 115.3072:
-#         return 252, 0, 0, 255
-#     elif value >= 115.3072:
-#         return 160, 0, 0, 255
-#     else:
-#         return 0, 0, 0, 0  # default: transparent
-
-
-# def ndarray_to_png(array: np.ndarray, output_path: str):
-#     """
-#     Convert 2D numpy array into a PNG image.
-
-#     :param array: 2D numpy array with rain intensity values
-#     :param output_path: path to the output PNG image
-#     """
-#     height, width = array.shape
-#     image = Image.new("RGBA", (width, height))
-#     pixels = image.load()
-
-#     # assign colors to pixels based on the values in the ndarray
-#     for i in range(width):
-#         for j in range(height):
-#             # save pixel at height-j-1 Y position due to vertical flip
-#             pixels[i, height - j - 1] = _get_rain_color(array[j, i])
-
-#     try:
-#         image.save(output_path, "PNG")
-#     except Exception as error:
-#         logger.error("Cannot save PNG image '%s': %s", output_path, error)
 
 
 def save_ndarray_to_file(array: np.ndarray, output_path: str):
