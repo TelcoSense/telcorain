@@ -106,7 +106,6 @@ class MwLink:
 
 def get_rain_sum_colors():
     return {
-        0.0: "#00000000",
         0.1: "#370070",
         0.3: "#2e02a5",
         0.6: "#0001fc",
