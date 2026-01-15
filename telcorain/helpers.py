@@ -228,45 +228,37 @@ def _hex_to_rgba_u8(h: str) -> np.ndarray:
 def rain_to_rgba_custom(
     grid: np.ndarray, levels: np.ndarray, colors_rgba_u8: np.ndarray
 ) -> np.ndarray:
-    """
-    grid: (ny,nx) float with NaNs
-    levels: (K,) increasing breakpoints
-    colors_rgba_u8: (K,4) uint8 RGBA colors at each breakpoint
-    Returns: (ny,nx,4) uint8
-    """
     z = np.asarray(grid, dtype=float)
     ny, nx = z.shape
     out = np.zeros((ny, nx, 4), dtype=np.uint8)
 
-    finite = np.isfinite(z)
-    if not finite.any():
-        return out  # all transparent
+    if len(levels) < 2:
+        return out
 
-    # clamp to [levels[0], levels[-1]]
-    zc = z.copy()
-    zc[~finite] = levels[0]
-    zc = np.clip(zc, levels[0], levels[-1])
+    # Visible only from the first meaningful threshold (usually 0.1)
+    vmin = float(levels[1])
+    visible = np.isfinite(z) & (z >= vmin)
+    if not visible.any():
+        return out
 
-    # bin index i such that levels[i] <= z < levels[i+1]
+    zc = np.clip(z, levels[0], levels[-1])
+
     idx = np.searchsorted(levels, zc, side="right") - 1
     idx = np.clip(idx, 0, len(levels) - 2)
 
     l0 = levels[idx]
     l1 = levels[idx + 1]
-    # avoid division by zero if two levels equal
     denom = l1 - l0
     denom[denom == 0] = 1.0
-    t = (zc - l0) / denom  # 0..1 inside the interval
+    t = (zc - l0) / denom
 
-    c0 = colors_rgba_u8[idx]  # (ny,nx,4)
-    c1 = colors_rgba_u8[idx + 1]  # (ny,nx,4)
+    c0 = colors_rgba_u8[idx]
+    c1 = colors_rgba_u8[idx + 1]
 
-    # linear interpolation in float then cast to u8
     cf = (1.0 - t)[..., None] * c0.astype(float) + t[..., None] * c1.astype(float)
-    out[finite] = np.round(cf[finite]).astype(np.uint8)
 
-    # make NaNs fully transparent
-    out[~finite, 3] = 0
+    out[visible] = np.round(cf[visible]).astype(np.uint8)
+    out[~visible, 3] = 0
     return out
 
 

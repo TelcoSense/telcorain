@@ -49,10 +49,9 @@ def generate_rainfields(
       - normal intensity grids (mm/h), always
       - hour-sum grids (mm), only when config["hour_sum"]["enabled"] is True
 
-    Adds option:
       [setting].dry_as_nan = true
         - if true, link value == 0 is converted to NaN before interpolation
-        - interpolator has exclude_nan=True so those links are ignored (synth behavior)
+        - interpolator has exclude_nan=True so those links are ignored (telcorain synth version behavior)
         - this is applied for both mm/h and hour-sum mm series
 
     Realtime behavior:
@@ -244,7 +243,7 @@ def generate_rainfields(
         min_rain = float(config["raingrids"]["min_rain_value"])
 
         # synth-like behavior: only 0 becomes NaN, no thresholding on links
-        dry_as_nan = bool(config["setting"]["dry_as_nan"])
+        dry_as_nan = config["setting"]["dry_as_nan"]
 
         # --------------------------------------------------------------
         # 2b) Hour-sum computation on link-series (before spatial interpolation)
@@ -252,6 +251,9 @@ def generate_rainfields(
         hs_cfg = config.get("hour_sum", {})
         hour_sum_enabled = bool(hs_cfg.get("enabled", False))
         hour_sum_win_min = int(hs_cfg.get("window_minutes", 60))
+
+        window_hours = float(hour_sum_win_min) / 60.0
+        min_rain_mm = min_rain * window_hours
 
         if hour_sum_enabled:
             dt_hours = float(ts) / 60.0
@@ -299,18 +301,12 @@ def generate_rainfields(
                 ygrid=y_grid,
             )
 
-            # keep your output convention for intensity maps:
-            # values below min_rain become 0 (and NaNs remain NaN unless you force them)
             grid[grid < min_rain] = 0.0
             rain_grids.append(grid)
 
             # ---- hour-sum mm ----
             if hour_sum_enabled and z_hour_sum_all is not None:
-                zsum_t = np.asarray(z_hour_sum_all[:, i], dtype=float).copy()
-
-                if dry_as_nan:
-                    zsum_t[zsum_t == 0.0] = np.nan
-
+                zsum_t = z_hour_sum_all[:, i]
                 grid_sum = interpolator(
                     x=x_sites,
                     y=y_sites,
@@ -319,9 +315,12 @@ def generate_rainfields(
                     ygrid=y_grid,
                 )
 
-                # keep existing behavior: NaN stays NaN, negatives to 0
+                # keep NaNs transparent
                 grid_sum[~np.isfinite(grid_sum)] = np.nan
-                grid_sum[grid_sum < 0.0] = 0.0
+
+                # remove tiny IDW halos by applying the mm-equivalent of min_rain
+                grid_sum[grid_sum < min_rain_mm] = 0.0
+
                 rain_grids_sum.append(grid_sum)
 
             if not is_historic:
