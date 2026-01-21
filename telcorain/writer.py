@@ -20,11 +20,11 @@ from xarray import Dataset
 from telcorain.cython.raincolor import rain_to_rgba
 from telcorain.handlers import logger
 from telcorain.helpers import (
-    dt64_to_unixtime,
-    save_ndarray_to_file,
     _hex_to_rgba_u8,
-    rain_to_rgba_custom,
+    dt64_to_unixtime,
     get_rain_sum_colors,
+    rain_to_rgba_custom,
+    save_ndarray_to_file,
     verify_hour_sum,
 )
 
@@ -51,7 +51,7 @@ class Writer:
         self.output_json_info = self.config["setting"]["output_json_info"]
 
         # output dirs
-        if is_historic or is_web:
+        if is_historic:
             user_dir = self.config["user_info"]["folder_name"]
             output_json_dir = self.config["directories"]["outputs_json"]
             output_sum_dir = self.config["directories"]["outputs_sum"]
@@ -68,6 +68,18 @@ class Writer:
             self.outputs_json_dir = self.config["directories"]["outputs_json"]
             self.outputs_sum_dir = self.config["directories"]["outputs_sum"]
             self.outputs_sum_json_dir = self.config["directories"]["outputs_sum_json"]
+
+        if is_web:
+            output_dir_int = self.config["user_info"]["output_dir_int"]
+            output_dir_int_json = self.config["user_info"]["output_dir_int_json"]
+            output_dir_sum = self.config["user_info"]["output_dir_sum"]
+            output_dir_sum_json = self.config["user_info"]["output_dir_sum_json"]
+
+            self.outputs_raw_dir = f"{output_dir_int}_raw"
+            self.outputs_web_dir = output_dir_int
+            self.outputs_json_dir = output_dir_int_json
+            self.outputs_sum_dir = output_dir_sum
+            self.outputs_sum_json_dir = output_dir_sum_json
 
         # overall intensity parameters from config
         self.overall_intensity_ref = self.config["raingrids"]["overall_intensity_ref"]
