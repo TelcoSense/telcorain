@@ -14,7 +14,7 @@ from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
 from telcorain.handlers import logger
 from telcorain.helpers import create_config_dict, ensure_utc, select_all_links
-from telcorain.writer import Writer
+from telcorain.writer_modified import Writer
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
