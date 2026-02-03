@@ -1,66 +1,60 @@
 # TelcoRain
 
 TelcoRain is a Python pipeline for estimating rainfall from commercial microwave links (CMLs).  
-It reads CML power/temperature data from InfluxDB, uses metadata from MariaDB, computes rain rates per link, interpolates them to spatial rainfields, and writes gridded outputs (`.npy`, `.png`) plus optional time-series back to InfluxDB.
+It reads metadata from MariaDB, timeseries data from InfluxDB, supports both real-time and historic processing, computes spatial interpolation using IDW, hourly rainfall sums, optional temperature-based compensation, and export results to PNG, JSON, and InfluxDB.
 
+The system is designed as a configurable processing pipeline driven by an INI
+configuration file. Individual processing stages (data loading, wet–dry detection,
+rainfall estimation, interpolation, visualization) can be enabled or disabled
+without modifying the code.
 ---
 
 ## Main features
 
-- InfluxDB 2.x reader with server-side aggregation and pivoting to a clean wide DataFrame.
-- MariaDB metadata loader for link coordinates, frequencies, polarisation, etc.
-- Per-link rain rate computation using:
-  - Baseline estimation (pycomlink)
-  - Wet/dry classification (CNN or rolling STD)
-  - Wet-antenna attenuation (Schleiss, Leijnse, Pastorek)
-  - k–R relation from pycomlink
-- Spatial interpolation using inverse distance weighting (IDW)
-- Realtime CLI (continuous loop) and historic “one-shot” computation
-- Optional cropping of outputs using a GeoJSON mask
-- Configurable via `configs/config.ini` + Python overrides
+- InfluxDB 2.x data source
+- Real-time and historic processing modes
+- Rainfall intensity estimation (mm/h)
+- Hourly rainfall accumulation (mm)
+- Spatial interpolation using IDW (Inverse Distance Weighting)
+- Optional wet–dry detection:
+  - threshold-based
+  - rolling statistics
+  - MLP / CNN
+- Optional temperature filtering and compensation
+- Output formats:
+  - PNG maps
+  - NPY raw grids
+  - JSON metadata
+  - InfluxDB time series
+- Geographic masking using GeoJSON
+- Mercator (EPSG:3857) and lon/lat grids
+- Single pipeline for batch, realtime, and web usage
 
 ---
 
-## Repository layout
+## Processing Pipeline Overview
+
+Conceptual processing flow:
 
 ```
-telcorain/
-├─ assets/
-│  ├─ brno.png
-│  ├─ czechia.json
-│  └─ plain_czechia.png
-├─ cml_info/
-│  └─ invalid_cmls.csv
-├─ configs/
-│  └─ config.ini
-├─ env_info/
-│  ├─ environment_base.yml
-│  ├─ environment_full.yml
-│  ├─ environment_linux.yml
-│  └─ requirements_full.txt
-├─ logs
-├─ telcorain/
-│  ├─ cython
-│  ├─ database/
-│  │  ├─ influx_manager.py
-│  │  └─ sql_manager.py
-│  ├─ procedures/
-│  │  ├─ rain/
-│  │  │  ├─ rain_calculation.py
-│  │  │  ├─ rainfields_generation.py
-│  │  │  └─ temperature_compensation.py
-│  │  ├─ wet_dry/
-│  │  └─ exceptions.py
-│  ├─ __init__.py
-│  ├─ calculation.py
-│  ├─ dataprocessing.py
-│  ├─ handlers.py
-│  ├─ helpers.py
-│  ├─ writer.py
-├─ .gitignore 
-├─ run_cli.py
-├─ run_historic.py
-└─ README.md
+InfluxDB
+  ↓
+load_data_from_influxdb()
+  ↓
+convert_to_link_datasets()
+  ↓
+wet–dry detection (rolling window / CNN)
+  ↓
+rainfall intensity estimation (R)
+  ↓
+hour-sum rolling window (optional)
+  ↓
+generate_rainfields()   (IDW interpolation)
+  ↓
+Writer
+  - PNG
+  - JSON
+  - InfluxDB
 ```
 
 ---
@@ -75,7 +69,7 @@ telcorain/
 
 ### 2. Create the environment
 ```bash
-conda env create -f env_info/environment_full.yml
+conda env create -f env_info/environment_linux.yml
 conda activate telcorain_env
 ```
 
@@ -104,115 +98,103 @@ and then run the setup:
 python telcorain/cython/setup.py build_ext --inplace
 ```
 
+## Execution Modes
+
+### Real-time Mode
+
+- Runs in a continuous loop
+- Queries InfluxDB in a moving time window (e.g. 1 day)
+- Processes only newly available time steps
+- Writes incremental results to InfluxDB
+
+### Historic Mode
+
+- One-shot batch processing
+- Fixed start and end time
+- Supports warm-up for rolling windows and CNN-based models
+- Writes full output time series
+- Intended for reanalysis, validation, and reporting
+---
+
+
 ---
 
 ## Core components
 
 ---
 
-## 1. InfluxManager (`database/influx_manager.py`)
+## InfluxDB Data Access
 
-Responsible for reading CML time series from InfluxDB and optionally writing rain rates.
+InfluxDB queries are executed using Flux with:
 
-### Key methods
+- server-side aggregateWindow
+- server-side pivot to wide format
+- chunked IP queries to avoid query size limits
 
-- **query_units(...)**
-  - Executes window queries  
-  - Returns a pivoted wide DataFrame  
+Logical fields produced by the query:
 
-- **query_units_realtime(...)**
-  - Converts window strings ("1h", "1d", "7d")  
-  - Calls `query_units`
+- rx_power
+- tx_power
+- temperature (optional)
 
-- **write_points(points, bucket)**
-  - Writes rain-rate time series to an Influx bucket
+### Conditional Temperature Fetching
 
----
+Temperature data is fetched only if required.
 
-## 2. SqlManager (`database/sql_manager.py`)
+Temperature is queried if and only if at least one of the following is enabled:
 
-Loads metadata from MariaDB.
+- wet_dry.is_temp_filtered = true
+- wet_dry.is_temp_compensated = true
 
-### Key methods
-- **load_metadata(...)**
-  - Loads link info, frequencies, polarization, etc.  
-  - Applies filters by ID, length, exclude-list  
-
-- **get_last_raingrid() / insert_raingrid()**
-  - Backwards compatibility (rarely needed)
+If neither option is enabled, temperature is not queried at all, which reduces
+InfluxDB load and speeds up processing.
 
 ---
 
-## 3. Data loading & conversion (`dataprocessing.py`)
+## Wet–Dry Detection
 
-### Functions
+Wet–dry detection is optional and configurable.
 
-- **load_data_from_influxdb(...)**
-  - Builds IP list  
-  - Fetches data  
-  - Returns `(df, missing_links, ips)`
+Supported approaches include:
 
-- **convert_to_link_datasets(...)**
-  - Groups by agent host  
-  - Builds xarray Datasets per MW link  
-  - Creates two channels per link
+- fixed thresholding
+- rolling statistics
+- neural networks (MLP / CNN)
+
+All parameters are defined in the [wet_dry] configuration section.
 
 ---
 
-## 4. Rain rate computation (`procedures/rain/rain_calculation.py`)
+## Rainfall Intensity Estimation
 
-### Pipeline steps
-- Clean & interpolate powers  
-- Remove temperature‑correlated links  
-- Wet/dry:
-  - CNN-based  
-  - or rolling STD  
-- Baseline estimation  
-- Wet‑antenna attenuation  
-- Compute final rain intensity  
-- Produce xarray Dataset
+For each microwave link and time step, rainfall intensity R (mm/h) is estimated.
+
+If a link has multiple channels, channel values are averaged.
 
 ---
 
-## 5. Rainfields generation (`procedures/rain/rainfields_generation.py`)
+## Hourly Rainfall Sums
 
-### Steps
-- Build grid from limits & resolution  
-- Apply IDW interpolation  
-- Generate accumulated rainfall  
-- Create animation frames  
-- Crop if enabled  
+The optional hour_sum feature computes accumulated rainfall using a rolling window
+(e.g. 60 minutes).
 
-### Returns
-- **Realtime** → `(rain_grids, calc_data_steps, x_grid, y_grid, realtime_runs, last_time)`  
-- **Historic** → `(rain_grids, calc_data_steps, x_grid, y_grid)`
+Results are stored as R_hour_sum (mm).
 
 ---
 
-## 6. Writer (`writer.py`)
+## Spatial Interpolation (IDW)
 
-Writes outputs to disk and optionally to InfluxDB.
-
-### Methods
-- **_write_raingrids**  
-- **_write_timeseries_realtime**  
-- **_write_timeseries_historic**  
-- **push_results(...)**
+Spatial interpolation from link values to a regular grid is performed using
+Inverse Distance Weighting (IDW).
 
 ---
 
-## 7. Calculation (`calculation.py`)
+## Outputs
 
-Central orchestrator for one pipeline run.
-
-### Workflow (`run(...)`)
-1. Load data  
-2. Compute rain rates  
-3. Generate rainfields  
-4. Update internal state  
-5. Cleanup  
-6. Logging with `@measure_time`
-
+- PNG rainfall maps
+- JSON metadata
+- NPY raw grids (optional)
+- InfluxDB time series
 ---
 
 ## Running the pipeline
