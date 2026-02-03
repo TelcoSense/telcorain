@@ -1,12 +1,7 @@
 # TelcoRain
 
 TelcoRain is a Python pipeline for estimating rainfall from commercial microwave links (CMLs).  
-It reads metadata from MariaDB, timeseries data from InfluxDB, supports both real-time and historic processing, computes spatial interpolation using IDW, hourly rainfall sums, optional temperature-based compensation, and export results to PNG, JSON, and InfluxDB.
-
-The system is designed as a configurable processing pipeline driven by an INI
-configuration file. Individual processing stages (data loading, wet–dry detection,
-rainfall estimation, interpolation, visualization) can be enabled or disabled
-without modifying the code.
+It reads metadata from MariaDB, timeseries data from InfluxDB, supports both real-time and historic processing, computes spatial interpolation using IDW, hourly rainfall sums, optional temperature-based compensation, and export results to PNG, JSON, and InfluxDB. The system is designed as a configurable processing pipeline driven by an INI configuration file. Individual processing stages (data loading, wet–dry detection, rainfall estimation, interpolation, visualization) can be enabled or disabled without modifying the code.
 ---
 
 ## Main features
@@ -114,9 +109,6 @@ python telcorain/cython/setup.py build_ext --inplace
 - Supports warm-up for rolling windows and CNN-based models
 - Writes full output time series
 - Intended for reanalysis, validation, and reporting
----
-
-
 ---
 
 ## Core components
