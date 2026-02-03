@@ -32,6 +32,7 @@ class TelcorainCLI:
     delta_map: dict = {
         "1h": timedelta(hours=1),
         "3h": timedelta(hours=3),
+        "4h": timedelta(hours=4),
         "6h": timedelta(hours=6),
         "12h": timedelta(hours=12),
         "1d": timedelta(days=1),

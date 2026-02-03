@@ -25,7 +25,6 @@ from telcorain.helpers import (
     get_rain_sum_colors,
     rain_to_rgba_custom,
     save_ndarray_to_file,
-    verify_hour_sum,
 )
 
 

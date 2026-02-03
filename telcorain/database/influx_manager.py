@@ -22,7 +22,7 @@ class InfluxManager:
 
         _time (datetime64[ns, UTC])
         agent_host (str)
-        temperature (float)
+        temperature (float)            [optional if include_temperature=False]
         rx_power (float)
         tx_power (float)
 
@@ -33,7 +33,6 @@ class InfluxManager:
     def __init__(self):
         super(InfluxManager, self).__init__()
 
-        # create influx client with parameters from config file
         self.client: InfluxDBClient = InfluxDBClient.from_config_file(
             config_handler.config_path
         )
@@ -46,7 +45,6 @@ class InfluxManager:
             retry_interval=1000,
         )
 
-        # create influx write lock for thread safety (used only when writing output timeseries to InfluxDB)
         self.is_manager_locked = False
 
         self.BUCKET_INFLUX_DATA: str = config_handler.read_option(
@@ -72,6 +70,8 @@ class InfluxManager:
         end_str: str,
         ips_regex: str,
         interval_str: str,
+        *,
+        include_temperature: bool = True,
     ) -> str:
         """
         Build a Flux query that:
@@ -81,15 +81,22 @@ class InfluxManager:
         - aggregateWindow (server-side resampling)
         - pivot to wide format: columns = fields, rows = (_time, agent_host)
         """
+        field_filters = [
+            'r["_field"] == "VysilaciVykon"',
+            'r["_field"] == "Vysilany_Vykon"',
+            'r["_field"] == "PrijimanaUroven"',
+            'r["_field"] == "Signal"',
+        ]
+        if include_temperature:
+            field_filters.insert(0, 'r["_field"] == "Teplota"')
+
+        fields_expr = " or\n            ".join(field_filters)
+
         flux = f"""
         from(bucket: "{self.BUCKET_INFLUX_DATA}")
         |> range(start: {start_str}, stop: {end_str})
         |> filter(fn: (r) =>
-            r["_field"] == "Teplota" or
-            r["_field"] == "VysilaciVykon" or
-            r["_field"] == "Vysilany_Vykon" or
-            r["_field"] == "PrijimanaUroven" or
-            r["_field"] == "Signal"
+            {fields_expr}
         )
         |> filter(fn: (r) => r["agent_host"] =~ /^({ips_regex})$/)
         |> aggregateWindow(every: {interval_str}, fn: mean, createEmpty: true)
@@ -108,6 +115,8 @@ class InfluxManager:
         end_str: str,
         ip_list: List[str],
         interval_str: str,
+        *,
+        include_temperature: bool = True,
         chunk_size: int = 300,
     ) -> pd.DataFrame:
         """
@@ -116,19 +125,18 @@ class InfluxManager:
         Returns a single DataFrame with columns:
             _time (datetime64[ns, UTC])
             agent_host (str)
-            temperature (float)
             rx_power (float)
             tx_power (float)
+            temperature (float)  [only if include_temperature=True]
         """
+        base_cols = ["_time", "agent_host", "rx_power", "tx_power"]
+        if include_temperature:
+            base_cols.insert(2, "temperature")
 
         if not ip_list:
-            return pd.DataFrame(
-                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
-            )
+            return pd.DataFrame(columns=base_cols)
 
-        # escape IPs for safe regex
         escaped_ips = [re.escape(ip) for ip in ip_list]
-
         df_list: list[pd.DataFrame] = []
 
         for i in range(0, len(escaped_ips), chunk_size):
@@ -140,12 +148,12 @@ class InfluxManager:
                 end_str=end_str,
                 ips_regex=ips_regex,
                 interval_str=interval_str,
+                include_temperature=include_temperature,
             )
 
             try:
                 chunk_df = self.qapi.query_data_frame(flux)
             except Exception as e:
-                # In case of "compiled too big" or similar, retry with smaller chunks
                 if "compiled too big" in str(e) and chunk_size > 50:
                     logger.warning(
                         "Flux query compiled too big, retrying with smaller chunk_size=%d",
@@ -156,16 +164,15 @@ class InfluxManager:
                         end_str=end_str,
                         ip_list=ip_list,
                         interval_str=interval_str,
+                        include_temperature=include_temperature,
                         chunk_size=chunk_size // 2,
                     )
-                else:
-                    logger.error(
-                        "Error occurred during InfluxDB read query, skipping chunk. Error: %s",
-                        e,
-                    )
-                    continue
+                logger.error(
+                    "Error occurred during InfluxDB read query, skipping chunk. Error: %s",
+                    e,
+                )
+                continue
 
-            # query_data_frame may return list-of-DFs or a single DF
             if isinstance(chunk_df, list):
                 for df_part in chunk_df:
                     if isinstance(df_part, pd.DataFrame) and not df_part.empty:
@@ -174,39 +181,28 @@ class InfluxManager:
                 df_list.append(chunk_df)
 
         if not df_list:
-            return pd.DataFrame(
-                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
-            )
+            return pd.DataFrame(columns=base_cols)
 
-        # Concatenate all chunks once
         df = pd.concat(df_list, ignore_index=True)
         if df.empty:
-            return df
+            return pd.DataFrame(columns=base_cols)
 
-        # Some Influx versions use a column named "result" or multiindex columns.
-        # Flatten columns if needed.
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [
                 "_".join([str(c) for c in col if c != ""]) for col in df.columns
             ]
 
-        # Ensure we have the necessary columns
         if "_time" not in df.columns or "agent_host" not in df.columns:
-            return pd.DataFrame(
-                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
-            )
+            return pd.DataFrame(columns=base_cols)
 
-        # Normalize time to UTC datetime
         df["_time"] = pd.to_datetime(df["_time"], utc=True)
 
-        # ------------------------------------------------------------------
-        # Map raw fields → logical fields: temperature, rx_power, tx_power
-        # ------------------------------------------------------------------
         # Temperature
-        if "Teplota" in df.columns:
-            df["temperature"] = df["Teplota"]
-        else:
-            df["temperature"] = np.nan
+        if include_temperature:
+            if "Teplota" in df.columns:
+                df["temperature"] = df["Teplota"]
+            else:
+                df["temperature"] = np.nan
 
         # Rx power: prefer "PrijimanaUroven", fall back to "Signal"
         rx_series = None
@@ -217,10 +213,7 @@ class InfluxManager:
                 rx_series = df["Signal"]
             else:
                 rx_series = rx_series.fillna(df["Signal"])
-        if rx_series is None:
-            df["rx_power"] = np.nan
-        else:
-            df["rx_power"] = rx_series
+        df["rx_power"] = np.nan if rx_series is None else rx_series
 
         # Tx power: prefer "VysilaciVykon", fall back to "Vysilany_Vykon"
         tx_series = None
@@ -231,21 +224,16 @@ class InfluxManager:
                 tx_series = df["Vysilany_Vykon"]
             else:
                 tx_series = tx_series.fillna(df["Vysilany_Vykon"])
-        if tx_series is None:
-            df["tx_power"] = np.nan
-        else:
-            df["tx_power"] = tx_series
+        df["tx_power"] = np.nan if tx_series is None else tx_series
 
         # Keep only relevant columns
-        df = df[["_time", "agent_host", "temperature", "rx_power", "tx_power"]]
+        df = df[base_cols]
 
-        # Drop rows where all three logical fields are NaN
-        df = df.dropna(subset=["temperature", "rx_power", "tx_power"], how="all")
-
-        # If you suspect duplicates from Influx, you can uncomment this:
-        # df = df.sort_values(["agent_host", "_time"]).drop_duplicates(
-        #     ["agent_host", "_time"], keep="last"
-        # )
+        # Drop rows where all logical fields are NaN
+        drop_cols = ["rx_power", "tx_power"]
+        if include_temperature:
+            drop_cols = ["temperature"] + drop_cols
+        df = df.dropna(subset=drop_cols, how="all")
 
         return df
 
@@ -258,26 +246,20 @@ class InfluxManager:
         interval: int,
         rolling_values: int = None,
         compensate_historic: bool = False,
+        *,
+        include_temperature: bool = True,
     ) -> pd.DataFrame:
         """
         Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses (tags in InfluxDB).
         Returns a pandas DataFrame in wide form.
-
-        :param ips: list of IP addresses of CMLs to query
-        :param start: datetime with start of the query interval (UTC)
-        :param end: datetime with end of the query interval (UTC)
-        :param interval: time interval in minutes
-        :param rolling_values: number of samples for rolling window (historic compensation)
-        :param compensate_historic: whether to compensate for historic rolling window
-        :return: pandas DataFrame with columns [_time, agent_host, temperature, rx_power, tx_power]
         """
+        base_cols = ["_time", "agent_host", "rx_power", "tx_power"]
+        if include_temperature:
+            base_cols.insert(2, "temperature")
 
         if not ips:
-            return pd.DataFrame(
-                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
-            )
+            return pd.DataFrame(columns=base_cols)
 
-        # historic compensation -> extend start backwards
         if compensate_historic and rolling_values is not None:
             num_nan_samples = rolling_values
             compensation_seconds = num_nan_samples * interval * 60
@@ -295,16 +277,16 @@ class InfluxManager:
             microseconds=end.microsecond,
         )
 
-        # convert params to query substrings
         start_str = datetime_rfc(start)
         end_str = datetime_rfc(end)
-        interval_str = f"{interval * 60}s"  # time in seconds
+        interval_str = f"{interval * 60}s"
 
         return self._raw_query_chunks_df(
             start_str=start_str,
             end_str=end_str,
             ip_list=ips,
             interval_str=interval_str,
+            include_temperature=include_temperature,
             chunk_size=300,
         )
 
@@ -313,19 +295,17 @@ class InfluxManager:
         ips: List[str],
         realtime_window_str: str,
         interval: int,
+        *,
+        include_temperature: bool = True,
     ) -> pd.DataFrame:
         """
         Query InfluxDB for CMLs defined in 'ips' as list of their IP addresses.
         Query is done for the time interval defined by 'realtime_window_str'.
-
-        :param ips: list of IP addresses of CMLs to query
-        :param realtime_window_str: string describing selected moving time window
-        :param interval: time interval in minutes
-        :return: pandas DataFrame with columns [_time, agent_host, temperature, rx_power, tx_power]
         """
         delta_map = {
             "1h": timedelta(hours=1),
             "3h": timedelta(hours=3),
+            "4h": timedelta(hours=4),
             "6h": timedelta(hours=6),
             "12h": timedelta(hours=12),
             "1d": timedelta(days=1),
@@ -344,6 +324,7 @@ class InfluxManager:
             interval=interval,
             rolling_values=None,
             compensate_historic=False,
+            include_temperature=include_temperature,
         )
 
     def write_points(self, points, bucket):

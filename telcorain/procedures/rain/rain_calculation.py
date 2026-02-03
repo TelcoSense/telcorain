@@ -120,7 +120,11 @@ def get_rain_rates(
                     for link in calc_data
                 ]
             else:
+                # If 'wet' was already attached upstream (e.g. computed on 30 s and
+                # mapped to 10 min), do not override it.
                 for i, link in enumerate(calc_data):
+                    if "wet" in link.data_vars:
+                        continue
                     preprocessed = preprocess_utility.cml_preprocess(
                         cml=link,
                         interp_max_gap=10,

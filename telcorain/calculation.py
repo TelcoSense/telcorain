@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from telcorain.database.influx_manager import InfluxManager
@@ -105,10 +106,80 @@ class Calculation:
                 missing_links=missing_links,
                 log_run_id=log_run_id,
             )
+            # Keep time bounds for optional high-resolution queries (e.g. CNN wet/dry on 30 s)
+            df_time_min = None
+            df_time_max = None
+            try:
+                if df is not None and not df.empty and "_time" in df.columns:
+                    df_time_min = pd.to_datetime(df["_time"].min(), utc=True)
+                    df_time_max = pd.to_datetime(df["_time"].max(), utc=True)
+            except Exception:
+                df_time_min = None
+                df_time_max = None
             del df
 
         except ProcessingException:
             return
+
+        # =====================================================================
+        # 1b. Optional: compute *custom* CNN wet/dry on 30 s data, then map to 10 min
+        # =====================================================================
+        try:
+            wd_cfg = self.config.get("wet_dry", {})
+            if bool(wd_cfg.get("is_mlp_enabled", False)) and wd_cfg.get("cnn_model") not in [None, "", "polz"]:
+                from telcorain.procedures.wet_dry.cnn_resample import (
+                    compute_wet_mask_10min_from_30s,
+                )
+                import pandas as pd
+
+                # If bounds not available, fall back to config range.
+                start_utc = (df_time_min.to_pydatetime() if df_time_min is not None else self.config["time"]["start"])
+                end_utc = (df_time_max.to_pydatetime() if df_time_max is not None else self.config["time"]["end"])
+
+                # Query 30 s data just for wet/dry classification.
+                df30 = self.influx_man.query_units_seconds(
+                    ips=ips,
+                    start=start_utc,
+                    end=end_utc,
+                    interval_seconds=30,
+                    rolling_values=None,
+                    compensate_historic=False,
+                )
+
+                if df30 is not None and not df30.empty:
+                    calc_data_30s = convert_to_link_datasets(
+                        selected_links=self.selection,
+                        links=self.links,
+                        df=df30,
+                        missing_links=[],
+                        log_run_id=f"{log_run_id} CNN30s",
+                    )
+
+                    # Map by cml_id
+                    by_id_30s = {int(ds.cml_id.values): ds for ds in calc_data_30s}
+                    for i, ds10 in enumerate(calc_data):
+                        cml_id = int(ds10.cml_id.values)
+                        ds30 = by_id_30s.get(cml_id)
+                        if ds30 is None:
+                            continue
+
+                        wet10 = compute_wet_mask_10min_from_30s(
+                            ds30,
+                            ds10.time,
+                            model_param_dir=wd_cfg["cnn_model_name"],
+                            sample_size=60,
+                            threshold=0.5,
+                            target_rule="max",
+                            fillna_dry=True,
+                        )
+
+                        # Attach, so rain_calculation can reuse it.
+                        ds10["wet"] = (("time",), wet10.astype(bool))
+                        calc_data[i] = ds10
+        except Exception as e:
+            logger.warning(
+                f"[{log_run_id}] Custom CNN 30 s wet/dry precomputation failed, falling back to in-pipeline logic. Error: {e}"
+            )
 
         # =====================================================================
         # 2. COMPUTE RAIN RATES

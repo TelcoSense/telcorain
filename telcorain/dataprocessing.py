@@ -47,14 +47,28 @@ def load_data_from_influxdb(
     realtime: bool = False,
     realtime_timewindow: str = "1d",
 ) -> Tuple[pd.DataFrame, List[int], List[str]]:
-    ...
+    """
+    Fetch data from InfluxDB and return:
+      - df: wide dataframe with columns [_time, agent_host, rx_power, tx_power] + optional [temperature]
+      - missing_links: list of link_id that are missing (based on missing IPs)
+      - ips: queried IP list
+    """
     try:
         ips = get_ips_from_links_dict(selected_links, links)
+
+        # temperature is needed only when used later
+        wd_cfg = config.get("wet_dry", {})
+        need_temperature = bool(
+            wd_cfg.get("is_temp_filtered", False)
+            or wd_cfg.get("is_temp_compensated", False)
+        )
+
         if realtime:
             df = influx_man.query_units_realtime(
                 ips=ips,
                 realtime_window_str=realtime_timewindow,
                 interval=config["time"]["step"],
+                include_temperature=need_temperature,
             )
         else:
             # compute warm-up samples for historic compensation
@@ -63,7 +77,6 @@ def load_data_from_influxdb(
 
             warmup_samples = None
             if compensate:
-                wd_cfg = config.get("wet_dry", {})
                 rolling_vals = int(wd_cfg.get("rolling_values", 0) or 0)
                 baseline_samples = int(wd_cfg.get("baseline_samples", 0) or 0)
 
@@ -80,26 +93,21 @@ def load_data_from_influxdb(
                             warmup_samples, int(CNN_OUTPUT_LEFT_NANS_LENGTH)
                         )
                     except Exception:
-                        # Fallback if CNN constant cannot be imported
                         pass
 
-                # ------------------------------------------------------------
                 # Add extra warmup for 1-hour rolling sum (hour_sum feature)
-                # ------------------------------------------------------------
                 hs_cfg = config.get("hour_sum", {})
                 if bool(hs_cfg.get("enabled", False)):
                     ts = int(config["time"]["output_step"])  # minutes, e.g. 10
                     win_min = int(hs_cfg.get("window_minutes", 60))
                     if ts > 0 and win_min > 0:
                         win_steps = int(round(win_min / ts))
-                        # need (win_steps-1) frames before first output to have full sum
                         hour_sum_warmup = max(0, win_steps - 1)
                         warmup_samples = max(int(warmup_samples or 0), hour_sum_warmup)
 
                 if warmup_samples <= 0:
                     warmup_samples = None
 
-            # Pass warmup_samples to InfluxManager as generic "rolling_values"
             df = influx_man.query_units(
                 ips=ips,
                 start=config["time"]["start"],
@@ -107,14 +115,15 @@ def load_data_from_influxdb(
                 interval=config["time"]["step"],
                 rolling_values=warmup_samples,
                 compensate_historic=compensate,
+                include_temperature=need_temperature,
             )
 
         if df is None or df.empty:
             logger.info("[%s] Influx returned empty DataFrame.", log_run_id)
-            empty_df = pd.DataFrame(
-                columns=["_time", "agent_host", "temperature", "rx_power", "tx_power"]
-            )
-            # treat all links as missing
+            base_cols = ["_time", "agent_host", "rx_power", "tx_power"]
+            if need_temperature:
+                base_cols.insert(2, "temperature")
+            empty_df = pd.DataFrame(columns=base_cols)
             return empty_df, list(links.keys()), ips
 
         # Determine missing IPs based on DataFrame
@@ -157,7 +166,6 @@ def convert_to_link_datasets(
     missing_links: List[int],
     log_run_id: str = "default",
 ) -> List[xr.Dataset]:
-
     if df is None or df.empty:
         logger.warning("[%s] Empty DF in convert_to_link_datasets.", log_run_id)
         return []
@@ -169,7 +177,6 @@ def convert_to_link_datasets(
     df = df.drop_duplicates(subset=["agent_host", "_time"], keep="last")
     df = df.set_index("_time")
 
-    # Pre-group once (fast after sorting + indexing)
     groups: Dict[str, pd.DataFrame] = dict(tuple(df.groupby("agent_host", sort=False)))
 
     calc_data: List[xr.Dataset] = []
@@ -182,16 +189,18 @@ def convert_to_link_datasets(
         freq_tx: int,
     ) -> xr.Dataset:
         """Optimized channel builder with robust index handling."""
-
-        # Ensure sorted unique index on RX
         df_rx = df_rx.sort_index()
         if df_rx.index.has_duplicates:
             df_rx = df_rx[~df_rx.index.duplicated(keep="last")]
 
-        times = df_rx.index.values  # sorted, unique
+        times = df_rx.index.values
 
         rsl = df_rx["rx_power"].to_numpy(dtype=float)
-        temperature_rx = df_rx["temperature"].fillna(0.0).to_numpy(dtype=float)
+
+        if "temperature" in df_rx.columns:
+            temperature_rx = df_rx["temperature"].fillna(0.0).to_numpy(dtype=float)
+        else:
+            temperature_rx = np.zeros_like(rsl, dtype=float)
 
         if df_tx is None or df_tx.empty:
             tsl = np.zeros_like(rsl)
@@ -201,11 +210,16 @@ def convert_to_link_datasets(
             if df_tx.index.has_duplicates:
                 df_tx = df_tx[~df_tx.index.duplicated(keep="last")]
 
-            # Align df_tx to df_rx index
             aligned_tx = df_tx.reindex(df_rx.index)
 
             tsl = aligned_tx["tx_power"].fillna(0.0).to_numpy(dtype=float)
-            temperature_tx = aligned_tx["temperature"].fillna(0.0).to_numpy(dtype=float)
+
+            if "temperature" in aligned_tx.columns:
+                temperature_tx = (
+                    aligned_tx["temperature"].fillna(0.0).to_numpy(dtype=float)
+                )
+            else:
+                temperature_tx = np.zeros_like(tsl, dtype=float)
 
         if link_obj.tech in ["summit", "summit_bt"]:
             rsl = -rsl
@@ -230,13 +244,11 @@ def convert_to_link_datasets(
                 length=link_obj.distance,
             ),
         )
-
         return ds
 
     # ============================================================
     # MAIN LOOP
     # ============================================================
-
     for link_id, enabled in selected_links.items():
         if not enabled:
             continue
@@ -257,7 +269,6 @@ def convert_to_link_datasets(
         if link.freq_a == link.freq_b:
             link.freq_a += 1
 
-        # Build channels like in pycomlink
         ch_ab = build_channel_fast(
             link_obj=link,
             df_rx=df_a,

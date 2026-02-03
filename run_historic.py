@@ -91,11 +91,11 @@ if __name__ == "__main__":
             "dry_as_nan": False,
         },
         # CML filtering
-        "cml": {"min_length": 0.5, "max_length": 100, "exclude_cmls": False},
+        "cml": {"min_length": 0.5, "exclude_cmls": False},
         # user info for folder names and link selection (list of IDs)
         "user_info": {
-            "folder_name": "kraken",
-            "links_id": [i for i in range(1, 1000)],
+            "folder_name": "zenodo",
+            "links_id": [i for i in range(1, 5000)],
         },
         "wet_dry": {
             "is_mlp_enabled": False,
@@ -111,7 +111,7 @@ if __name__ == "__main__":
         },
         "hour_sum": {
             "enabled": True,
-            "write_influx_sum": True,
+            "write_influx_sum": False,
         },
         "rendering": {
             "is_crop_enabled": True,
