@@ -62,6 +62,7 @@ exclude_cmls=True
 [realtime]
 realtime_timewindow=1d
 retention_window=7d
+metadata_refresh_interval_runs=60 ; set 0 to disable periodic MariaDB metadata reload
 
 [historic]
 compensate_historic=True

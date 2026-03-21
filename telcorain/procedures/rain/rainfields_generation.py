@@ -55,8 +55,8 @@ def generate_rainfields(
         - this is applied for both mm/h and hour-sum mm series
 
     Realtime behavior:
-      - recomputes the whole window every call
-      - trims rain_grids and rain_grids_sum to exactly the current window length T
+      - uses the whole window as context
+      - interpolates and returns only newly available timesteps
     """
     if rain_grids_sum is None:
         rain_grids_sum = []
@@ -282,11 +282,45 @@ def generate_rainfields(
             z_hour_sum_all = None
 
         # --------------------------------------------------------------
-        # 2c) Spatial interpolation for each time step
+        # 2c) Determine which timesteps are new in realtime mode
         # --------------------------------------------------------------
         T = int(z_all.shape[1])
+        if is_historic:
+            time_indices = list(range(T))
+            calc_data_out = calc_data_steps
+            out_rain_grids = rain_grids
+            out_rain_grids_sum = rain_grids_sum
+        else:
+            if last_time is None:
+                new_mask = np.ones(T, dtype=bool)
+            else:
+                new_mask = times > last_time
 
-        for i in range(T):
+            time_indices = np.flatnonzero(new_mask).tolist()
+            calc_data_out = calc_data_steps.isel(time=time_indices)
+            out_rain_grids = []
+            out_rain_grids_sum = []
+
+            if not time_indices:
+                logger.info(
+                    "[%s] No new rainfield timesteps detected after %s.",
+                    log_run_id,
+                    last_time,
+                )
+                return (
+                    out_rain_grids,
+                    out_rain_grids_sum,
+                    calc_data_out,
+                    x_grid,
+                    y_grid,
+                    realtime_runs,
+                    last_time,
+                )
+
+        # --------------------------------------------------------------
+        # 2d) Spatial interpolation only for selected timesteps
+        # --------------------------------------------------------------
+        for i in time_indices:
             # ---- intensity mm/h ----
             z_t = np.asarray(z_all[:, i], dtype=float).copy()
 
@@ -302,7 +336,7 @@ def generate_rainfields(
             )
 
             grid[grid < min_rain] = 0.0
-            rain_grids.append(grid)
+            out_rain_grids.append(grid)
 
             # ---- hour-sum mm ----
             if hour_sum_enabled and z_hour_sum_all is not None:
@@ -321,33 +355,21 @@ def generate_rainfields(
                 # remove tiny IDW halos by applying the mm-equivalent of min_rain
                 grid_sum[grid_sum < min_rain_mm] = 0.0
 
-                rain_grids_sum.append(grid_sum)
+                out_rain_grids_sum.append(grid_sum)
 
             if not is_historic:
                 last_time = times[i]
 
         # --------------------------------------------------------------
-        # 2d) Realtime: trim lists to exactly this window length
-        # --------------------------------------------------------------
-        if not is_historic:
-            excess = len(rain_grids) - T
-            if excess > 0:
-                del rain_grids[:excess]
-
-            excess_sum = len(rain_grids_sum) - T
-            if excess_sum > 0:
-                del rain_grids_sum[:excess_sum]
-
-        # --------------------------------------------------------------
         # 3) Return
         # --------------------------------------------------------------
         if is_historic:
-            return rain_grids, rain_grids_sum, calc_data_steps, x_grid, y_grid
+            return out_rain_grids, out_rain_grids_sum, calc_data_out, x_grid, y_grid
 
         return (
-            rain_grids,
-            rain_grids_sum,
-            calc_data_steps,
+            out_rain_grids,
+            out_rain_grids_sum,
+            calc_data_out,
             x_grid,
             y_grid,
             realtime_runs,

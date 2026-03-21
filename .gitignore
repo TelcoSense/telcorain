@@ -38,6 +38,7 @@ outputs_sum/
 outputs_historic/
 outputs_json/
 outputs_sum_json/
+_backup/
 
 # OS
 .DS_Store

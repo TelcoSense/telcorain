@@ -1,4 +1,3 @@
-from time import sleep
 from datetime import datetime, timedelta, timezone
 from typing import List
 
@@ -327,19 +326,71 @@ class InfluxManager:
             include_temperature=include_temperature,
         )
 
+    @measure_time
+    def query_units_seconds(
+        self,
+        ips: List[str],
+        start: datetime,
+        end: datetime,
+        interval_seconds: int,
+        rolling_values: int = None,
+        compensate_historic: bool = False,
+        *,
+        include_temperature: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Query InfluxDB using a second-based aggregate interval.
+        """
+        base_cols = ["_time", "agent_host", "rx_power", "tx_power"]
+        if include_temperature:
+            base_cols.insert(2, "temperature")
+
+        if not ips:
+            return pd.DataFrame(columns=base_cols)
+
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+
+        if compensate_historic and rolling_values is not None:
+            compensation_seconds = rolling_values * interval_seconds
+            start = start - timedelta(seconds=compensation_seconds)
+
+        start = start - timedelta(
+            seconds=start.second % interval_seconds,
+            microseconds=start.microsecond,
+        )
+        end = end - timedelta(
+            seconds=end.second % interval_seconds,
+            microseconds=end.microsecond,
+        )
+
+        start_str = datetime_rfc(start)
+        end_str = datetime_rfc(end)
+        interval_str = f"{interval_seconds}s"
+
+        return self._raw_query_chunks_df(
+            start_str=start_str,
+            end_str=end_str,
+            ip_list=ips,
+            interval_str=interval_str,
+            include_temperature=include_temperature,
+            chunk_size=300,
+        )
+
     def write_points(self, points, bucket):
-        with InfluxDBClient.from_config_file(config_handler.config_path) as client_out:
-            try:
-                with client_out.write_api() as wapi_out:
-                    wapi_out.write(
-                        bucket=bucket, record=points, write_precision=WritePrecision.S
-                    )
-                    sleep(5)
-            except Exception as error:
-                logger.error(
-                    "Error occured during InfluxDB write query, stopping. Error: %s",
-                    error,
+        if not points:
+            return
+
+        try:
+            with self.client.write_api(write_options=self.options) as wapi_out:
+                wapi_out.write(
+                    bucket=bucket, record=points, write_precision=WritePrecision.S
                 )
+        except Exception as error:
+            logger.error(
+                "Error occured during InfluxDB write query, stopping. Error: %s",
+                error,
+            )
 
 
 # global instance of InfluxManager, accessible from all modules

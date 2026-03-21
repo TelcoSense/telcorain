@@ -8,6 +8,7 @@ import xarray as xr
 from telcorain.database.influx_manager import InfluxManager
 from telcorain.handlers import logger
 from telcorain.dataprocessing import (
+    RealtimeInfluxBuffer,
     convert_to_link_datasets,
     load_data_from_influxdb,
 )
@@ -60,6 +61,8 @@ class Calculation:
         self.y_grid: Optional[np.ndarray] = None
         self.calc_data_steps: Optional[xr.Dataset] = None
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
+        self.realtime_buffer = RealtimeInfluxBuffer()
+        self.force_data_refresh = False
 
     # =====================================================================
     # RUN
@@ -78,6 +81,15 @@ class Calculation:
             self.realtime_runs += 1
             log_run_id = f"RUN: {self.realtime_runs}"
             further_info = "Realtime"
+            force_realtime_refresh = (
+                self.force_data_refresh or self.realtime_runs % 1000 == 0
+            )
+            self.force_data_refresh = force_realtime_refresh
+            if force_realtime_refresh:
+                logger.info(
+                    "[%s] Forcing a full realtime Influx refresh to resync the rolling buffer.",
+                    log_run_id,
+                )
 
         logger.info(
             f"[{log_run_id}] {further_info} rainfall calculation procedure started."
@@ -87,7 +99,7 @@ class Calculation:
         # 1. LOAD DATA FROM INFLUX
         # =====================================================================
         try:
-            df, missing_links, ips = load_data_from_influxdb(
+            df, missing_links, ips, self.realtime_buffer = load_data_from_influxdb(
                 influx_man=self.influx_man,
                 config=self.config,
                 selected_links=self.selection,
@@ -97,7 +109,14 @@ class Calculation:
                 realtime_timewindow=(
                     realtime_timewindow if not self.is_historic else "1d"
                 ),
+                realtime_buffer=(
+                    self.realtime_buffer if not self.is_historic else None
+                ),
+                force_realtime_refresh=(
+                    self.force_data_refresh if not self.is_historic else False
+                ),
             )
+            self.force_data_refresh = False
 
             calc_data: list[xr.Dataset] = convert_to_link_datasets(
                 selected_links=self.selection,
@@ -144,6 +163,7 @@ class Calculation:
                     interval_seconds=30,
                     rolling_values=None,
                     compensate_historic=False,
+                    include_temperature=False,
                 )
 
                 if df30 is not None and not df30.empty:
@@ -235,9 +255,6 @@ class Calculation:
         # 4. REALTIME housekeeping
         # =====================================================================
         if not self.is_historic:
-            # refresh full data after 1000 runs
-            self.force_data_refresh = self.realtime_runs % 1000 == 0
-
             # prevent overflow
             if self.realtime_runs == 99999:
                 self.realtime_runs = 1
@@ -246,3 +263,23 @@ class Calculation:
                     "Refreshing realtime_runs to 1 after 99999 runs. "
                     f"No. of thousand runs: {self.thousands_runs}"
                 )
+
+    def update_realtime_metadata(
+        self,
+        links: dict[int, MwLink],
+        selection: dict[int, int],
+        *,
+        reset_realtime_buffer: bool = True,
+    ) -> None:
+        """
+        Swap in refreshed metadata for realtime mode.
+
+        When IP membership can change, resetting the raw-data buffer is the safest
+        way to guarantee the next fetch fully reflects the new link set.
+        """
+        self.links = links
+        self.selection = selection
+
+        if reset_realtime_buffer:
+            self.realtime_buffer = RealtimeInfluxBuffer()
+            self.force_data_refresh = True

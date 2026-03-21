@@ -124,6 +124,10 @@ class Writer:
         self.hs_levels = np.asarray(levels_sorted, dtype=float)
         self.hs_colors = np.stack([_hex_to_rgba_u8(c) for c in cols_sorted], axis=0)
 
+    def set_since_time(self, since_time: Optional[datetime]) -> None:
+        """Update the realtime write cursor for the next push."""
+        self.since_time = since_time if since_time is not None else datetime.min
+
     # ------------------------------------------------------------------
     # POLYGON MASKING
     # ------------------------------------------------------------------
@@ -452,6 +456,8 @@ class Writer:
         filtered = calc_dataset.where(calc_dataset.time > np_since_time).dropna(
             dim="time", how="all"
         )
+        if filtered.time.size == 0:
+            return
 
         points = []
         for c in range(filtered.cml_id.size):
@@ -502,6 +508,8 @@ class Writer:
             dim="time", how="all"
         )
         if "R_hour_sum" not in filtered.data_vars:
+            return
+        if filtered.time.size == 0:
             return
 
         points = []
@@ -567,64 +575,71 @@ class Writer:
         self, rain_grids, x_grid, y_grid, calc_dataset, rain_grids_sum=None
     ):
         self.influx_man.is_manager_locked = True
+        try:
+            if calc_dataset is None or x_grid is None or y_grid is None:
+                logger.info("[WRITE] Nothing to write for this iteration.")
+                return
 
-        if len(rain_grids) != len(calc_dataset.time):
-            logger.error("Raingrids/time mismatch")
-            self.influx_man.is_manager_locked = False
-            return
+            if "time" not in calc_dataset.dims or calc_dataset.time.size == 0:
+                logger.info("[WRITE] No new timesteps to write for this iteration.")
+                return
 
-        # Historic warmup trimming
-        hist_cfg = self.config.get("historic", {})
-        if self.is_historic and hist_cfg.get("compensate_historic", False):
-            req_start = self.config["time"]["start"]
+            if len(rain_grids) != len(calc_dataset.time):
+                logger.error("Raingrids/time mismatch")
+                return
 
-            if req_start.tzinfo:
-                req_start_utc = req_start.astimezone(timezone.utc)
+            # Historic warmup trimming
+            hist_cfg = self.config.get("historic", {})
+            if self.is_historic and hist_cfg.get("compensate_historic", False):
+                req_start = self.config["time"]["start"]
+
+                if req_start.tzinfo:
+                    req_start_utc = req_start.astimezone(timezone.utc)
+                else:
+                    req_start_utc = req_start.replace(tzinfo=timezone.utc)
+
+                req_start_utc = req_start_utc.replace(tzinfo=None)
+
+                calc_dataset = calc_dataset.sel(time=slice(req_start_utc, None))
+                keep_len = calc_dataset.sizes["time"]
+                rain_grids = rain_grids[-keep_len:]
+                if rain_grids_sum is not None:
+                    rain_grids_sum = rain_grids_sum[-keep_len:]
+
+            if rain_grids_sum is not None and self.config["hour_sum"]["enabled"]:
+                if len(rain_grids_sum) != len(calc_dataset.time):
+                    m = min(len(rain_grids_sum), len(calc_dataset.time))
+                    logger.warning(
+                        f"[WRITE] Aligning hour-sum to min length {m}: "
+                        f"grids_sum={len(rain_grids_sum)} time={len(calc_dataset.time)}"
+                    )
+                    rain_grids_sum = rain_grids_sum[-m:]
+                    calc_dataset = calc_dataset.isel(time=slice(-m, None))
+                    rain_grids = rain_grids[-m:]
+
+            # ensure dirs
+            if self.config["directories"]["save_web"]:
+                os.makedirs(self.outputs_web_dir, exist_ok=True)
+            if self.config["directories"]["save_raw"]:
+                os.makedirs(self.outputs_raw_dir, exist_ok=True)
+            if self.output_json_info:
+                os.makedirs(self.outputs_json_dir, exist_ok=True)
+
+            # write PNGs
+            self._write_raingrids(rain_grids, x_grid, y_grid, calc_dataset)
+
+            if self.config["hour_sum"]["enabled"] and rain_grids_sum is not None:
+                self._write_sum_raingrids(rain_grids_sum, x_grid, y_grid, calc_dataset)
+
+            # write timeseries
+            if self.is_historic:
+                if self.write_influx_intensities:
+                    self._write_timeseries_intensity_historic(calc_dataset)
+                self._write_timeseries_hour_sum_historic(calc_dataset)
             else:
-                req_start_utc = req_start.replace(tzinfo=timezone.utc)
-
-            req_start_utc = req_start_utc.replace(tzinfo=None)
-
-            calc_dataset = calc_dataset.sel(time=slice(req_start_utc, None))
-            keep_len = calc_dataset.sizes["time"]
-            rain_grids = rain_grids[-keep_len:]
-            if rain_grids_sum is not None:
-                rain_grids_sum = rain_grids_sum[-keep_len:]
-
-        if rain_grids_sum is not None and self.config["hour_sum"]["enabled"]:
-            if len(rain_grids_sum) != len(calc_dataset.time):
-                m = min(len(rain_grids_sum), len(calc_dataset.time))
-                logger.warning(
-                    f"[WRITE] Aligning hour-sum to min length {m}: "
-                    f"grids_sum={len(rain_grids_sum)} time={len(calc_dataset.time)}"
-                )
-                rain_grids_sum = rain_grids_sum[-m:]
-                calc_dataset = calc_dataset.isel(time=slice(-m, None))
-                rain_grids = rain_grids[-m:]
-
-        # ensure dirs
-        if self.config["directories"]["save_web"]:
-            os.makedirs(self.outputs_web_dir, exist_ok=True)
-        if self.config["directories"]["save_raw"]:
-            os.makedirs(self.outputs_raw_dir, exist_ok=True)
-        if self.output_json_info:
-            os.makedirs(self.outputs_json_dir, exist_ok=True)
-
-        # write PNGs
-        self._write_raingrids(rain_grids, x_grid, y_grid, calc_dataset)
-
-        if self.config["hour_sum"]["enabled"] and rain_grids_sum is not None:
-            self._write_sum_raingrids(rain_grids_sum, x_grid, y_grid, calc_dataset)
-
-        # write timeseries
-        if self.is_historic:
-            if self.write_influx_intensities:
-                self._write_timeseries_intensity_historic(calc_dataset)
-            self._write_timeseries_hour_sum_historic(calc_dataset)
-        else:
-            np_since = np.datetime64(self.since_time)
-            if self.write_influx_intensities:
-                self._write_timeseries_intensity_realtime(calc_dataset, np_since)
-            self._write_timeseries_hour_sum_realtime(calc_dataset, np_since)
-
-        self.influx_man.is_manager_locked = False
+                np_since = np.datetime64(self.since_time)
+                if self.write_influx_intensities:
+                    self._write_timeseries_intensity_realtime(calc_dataset, np_since)
+                self._write_timeseries_hour_sum_realtime(calc_dataset, np_since)
+        finally:
+            self.influx_man.is_manager_locked = False

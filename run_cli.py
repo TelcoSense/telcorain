@@ -47,6 +47,9 @@ class TelcorainCLI:
         self.config: dict = create_config_dict(path=config_path, format=True)
         self.repetition_interval: int = self.config["setting"]["repetition_interval"]
         self.sleep_interval: int = self.config["setting"]["sleep_interval"]
+        self.metadata_refresh_interval_runs: int = int(
+            self.config["realtime"].get("metadata_refresh_interval_runs", 60)
+        )
 
         self.realtime_timewindow = self.delta_map[
             self.config["realtime"]["realtime_timewindow"]
@@ -112,11 +115,7 @@ class TelcorainCLI:
         """Main infinite realtime loop."""
         self._print_init_log_info()
 
-        links = self.sql_man.load_metadata(
-            min_length=self.config["cml"]["min_length"],
-            max_length=self.config["cml"]["max_length"],
-            exclude_ids=self.config["cml"]["exclude_cmls"],
-        )
+        links = self._load_realtime_metadata()
         selected_links = select_all_links(links=links)
 
         start_time = datetime.now(tz=timezone.utc)
@@ -129,14 +128,29 @@ class TelcorainCLI:
             config=self.config,
             is_historic=False,
         )
+        writer = Writer(
+            influx_man=self.influx_man,
+            write_influx_intensities=self.config["setting"]["write_influx_intensities"],
+            config=self.config,
+            since_time=datetime.min.replace(tzinfo=timezone.utc),
+            is_historic=False,
+        )
 
         realtime_window = self.config["realtime"]["realtime_timewindow"]
 
         while True:
-            self._run_iteration(calculation, realtime_timewindow=realtime_window)
+            self._maybe_refresh_realtime_metadata(calculation)
+            self._run_iteration(
+                calculation,
+                realtime_timewindow=realtime_window,
+                writer=writer,
+            )
 
     def _run_iteration(
-        self, calculation: Calculation, realtime_timewindow: str
+        self,
+        calculation: Calculation,
+        realtime_timewindow: str,
+        writer: Writer | None = None,
     ) -> None:
         """Run a single realtime iteration."""
         current_time, next_time, since_time = self._get_times()
@@ -156,13 +170,18 @@ class TelcorainCLI:
         calculation.run(realtime_timewindow=realtime_timewindow)
 
         # Writer
-        writer = Writer(
-            influx_man=self.influx_man,
-            write_influx_intensities=self.config["setting"]["write_influx_intensities"],
-            config=self.config,
-            since_time=since_time,
-            is_historic=False,
-        )
+        if writer is None:
+            writer = Writer(
+                influx_man=self.influx_man,
+                write_influx_intensities=self.config["setting"][
+                    "write_influx_intensities"
+                ],
+                config=self.config,
+                since_time=since_time,
+                is_historic=False,
+            )
+        else:
+            writer.set_since_time(since_time)
 
         writer.push_results(
             rain_grids=calculation.rain_grids,
@@ -202,6 +221,7 @@ class TelcorainCLI:
             f"power {self.config['interp']['idw_power']}",
             f"Realtime window: {self.config['realtime']['realtime_timewindow']}",
             f"Retention window: {self.config['realtime']['retention_window']}",
+            f"Metadata refresh runs: {self.metadata_refresh_interval_runs}",
         ]
 
         logger.debug("Global config settings: " + "; ".join(config_info))
@@ -214,6 +234,78 @@ class TelcorainCLI:
             current_time,
             current_time + timedelta(seconds=self.repetition_interval),
             current_time - timedelta(seconds=self.repetition_interval),
+        )
+
+    def _load_realtime_metadata(self) -> dict:
+        """Load the current realtime CML metadata selection from MariaDB."""
+        return self.sql_man.load_metadata(
+            min_length=self.config["cml"]["min_length"],
+            max_length=self.config["cml"]["max_length"],
+            exclude_ids=self.config["cml"]["exclude_cmls"],
+        )
+
+    def _metadata_signature(self, links: dict) -> tuple:
+        """
+        Build a stable comparable snapshot of link metadata relevant for realtime processing.
+        """
+        return tuple(
+            sorted(
+                (
+                    link_id,
+                    link.ip_a,
+                    link.ip_b,
+                    link.freq_a,
+                    link.freq_b,
+                    link.polarization,
+                    link.tech,
+                    link.distance,
+                    link.latitude_a,
+                    link.longitude_a,
+                    link.latitude_b,
+                    link.longitude_b,
+                )
+                for link_id, link in links.items()
+            )
+        )
+
+    def _maybe_refresh_realtime_metadata(self, calculation: Calculation) -> None:
+        """
+        Periodically reload MariaDB metadata so new/removed links can join without restart.
+        """
+        if self.metadata_refresh_interval_runs <= 0:
+            return
+        if calculation.realtime_runs <= 0:
+            return
+        if calculation.realtime_runs % self.metadata_refresh_interval_runs != 0:
+            return
+
+        current_signature = self._metadata_signature(calculation.links)
+        refreshed_links = self._load_realtime_metadata()
+        refreshed_signature = self._metadata_signature(refreshed_links)
+
+        if refreshed_signature == current_signature:
+            self.logger.info(
+                "Metadata refresh after %d realtime runs: no link changes detected.",
+                calculation.realtime_runs,
+            )
+            return
+
+        current_ids = set(calculation.links)
+        refreshed_ids = set(refreshed_links)
+        added = len(refreshed_ids - current_ids)
+        removed = len(current_ids - refreshed_ids)
+
+        self.logger.info(
+            "Metadata refresh after %d realtime runs: detected changes in the link set (+%d, -%d). "
+            "Updating calculation metadata and forcing a full raw-data refresh.",
+            calculation.realtime_runs,
+            added,
+            removed,
+        )
+        calculation.update_realtime_metadata(
+            links=refreshed_links,
+            selection=select_all_links(refreshed_links),
+            reset_realtime_buffer=True,
         )
 
     # ======================================================================

@@ -84,8 +84,8 @@ if __name__ == "__main__":
         "time": {
             "step": 10,
             "output_step": 10,
-            "start": datetime(2023, 10, 13, 6, 30, tzinfo=None),
-            "end": datetime(2023, 10, 13, 10, 30, tzinfo=None),
+            "start": datetime(2025, 1, 1, 0, 0, tzinfo=None),
+            "end": datetime(2025, 1, 30, 23, 50, tzinfo=None),
         },
         "setting": {
             "dry_as_nan": False,
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         "cml": {"min_length": 0.5, "exclude_cmls": False},
         # user info for folder names and link selection (list of IDs)
         "user_info": {
-            "folder_name": "zenodo",
+            "folder_name": "test_01",
             "links_id": [i for i in range(1, 5000)],
         },
         "wet_dry": {

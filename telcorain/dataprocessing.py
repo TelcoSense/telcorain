@@ -1,4 +1,6 @@
 import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple
 
 import numpy as np
@@ -9,6 +11,180 @@ from telcorain.database.influx_manager import InfluxManager
 from telcorain.handlers import logger
 from telcorain.procedures.exceptions import ProcessingException
 from telcorain.helpers import measure_time, MwLink
+
+
+REALTIME_DELTA_MAP: dict[str, timedelta] = {
+    "1h": timedelta(hours=1),
+    "3h": timedelta(hours=3),
+    "4h": timedelta(hours=4),
+    "6h": timedelta(hours=6),
+    "12h": timedelta(hours=12),
+    "1d": timedelta(days=1),
+    "2d": timedelta(days=2),
+    "7d": timedelta(days=7),
+    "14d": timedelta(days=14),
+    "30d": timedelta(days=30),
+}
+
+REALTIME_BUFFER_OVERLAP_STEPS = 2
+
+
+@dataclass
+class RealtimeInfluxBuffer:
+    """
+    Stateful raw Influx frame cache for realtime mode.
+
+    The cache is row-based, so it naturally supports links appearing/disappearing
+    between fetches as long as the IP selection itself stays the same.
+    """
+
+    df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    ips: frozenset[str] = field(default_factory=frozenset)
+    interval_minutes: Optional[int] = None
+    include_temperature: Optional[bool] = None
+    last_window_end: Optional[datetime] = None
+
+    def is_compatible(
+        self,
+        ips: List[str],
+        interval_minutes: int,
+        include_temperature: bool,
+    ) -> bool:
+        return (
+            self.ips == frozenset(ips)
+            and self.interval_minutes == interval_minutes
+            and self.include_temperature == include_temperature
+        )
+
+
+def _make_base_df(include_temperature: bool) -> pd.DataFrame:
+    base_cols = ["_time", "agent_host", "rx_power", "tx_power"]
+    if include_temperature:
+        base_cols.insert(2, "temperature")
+    return pd.DataFrame(columns=base_cols)
+
+
+def _trim_realtime_buffer_df(
+    df: Optional[pd.DataFrame],
+    *,
+    include_temperature: bool,
+    ips: List[str],
+    window_start: datetime,
+) -> pd.DataFrame:
+    base_cols = _make_base_df(include_temperature).columns.tolist()
+    if df is None or df.empty:
+        return pd.DataFrame(columns=base_cols)
+
+    trimmed = df.copy()
+    trimmed["_time"] = pd.to_datetime(trimmed["_time"], utc=True)
+    trimmed = trimmed[trimmed["_time"] >= pd.Timestamp(window_start)]
+    trimmed = trimmed[trimmed["agent_host"].isin(ips)]
+
+    if trimmed.empty:
+        return pd.DataFrame(columns=base_cols)
+
+    trimmed = trimmed.sort_values(["agent_host", "_time"])
+    trimmed = trimmed.drop_duplicates(subset=["_time", "agent_host"], keep="last")
+
+    for col in base_cols:
+        if col not in trimmed.columns:
+            trimmed[col] = np.nan
+
+    return trimmed[base_cols].reset_index(drop=True)
+
+
+def _load_realtime_data_from_influxdb(
+    influx_man: InfluxManager,
+    *,
+    ips: List[str],
+    interval_minutes: int,
+    realtime_timewindow: str,
+    include_temperature: bool,
+    realtime_buffer: Optional[RealtimeInfluxBuffer],
+    force_refresh: bool,
+) -> tuple[pd.DataFrame, RealtimeInfluxBuffer]:
+    if realtime_timewindow not in REALTIME_DELTA_MAP:
+        raise ValueError(f"Unsupported realtime window: {realtime_timewindow}")
+
+    end = datetime.now(timezone.utc)
+    window_start = end - REALTIME_DELTA_MAP[realtime_timewindow]
+
+    buffer = realtime_buffer or RealtimeInfluxBuffer()
+    buffer_is_compatible = buffer.is_compatible(
+        ips=ips,
+        interval_minutes=interval_minutes,
+        include_temperature=include_temperature,
+    )
+    needs_full_refresh = (
+        force_refresh or not buffer_is_compatible or buffer.last_window_end is None
+    )
+
+    if needs_full_refresh:
+        logger.debug(
+            "Realtime Influx fetch: full refresh (force=%s, compatible=%s, has_cursor=%s).",
+            force_refresh,
+            buffer_is_compatible,
+            buffer.last_window_end is not None,
+        )
+        df = influx_man.query_units(
+            ips=ips,
+            start=window_start,
+            end=end,
+            interval=interval_minutes,
+            rolling_values=None,
+            compensate_historic=False,
+            include_temperature=include_temperature,
+        )
+    else:
+        overlap = timedelta(
+            minutes=max(interval_minutes * REALTIME_BUFFER_OVERLAP_STEPS, interval_minutes)
+        )
+        fetch_anchor = (
+            pd.to_datetime(buffer.df["_time"].max(), utc=True).to_pydatetime()
+            if not buffer.df.empty
+            else buffer.last_window_end
+        )
+        fetch_start = max(window_start, fetch_anchor - overlap)
+
+        logger.debug(
+            "Realtime Influx fetch: incremental refresh from %s to %s (cached rows=%d).",
+            fetch_start,
+            end,
+            0 if buffer.df is None else len(buffer.df),
+        )
+
+        if fetch_start >= end:
+            df = buffer.df
+        else:
+            tail_df = influx_man.query_units(
+                ips=ips,
+                start=fetch_start,
+                end=end,
+                interval=interval_minutes,
+                rolling_values=None,
+                compensate_historic=False,
+                include_temperature=include_temperature,
+            )
+            df = (
+                pd.concat([buffer.df, tail_df], ignore_index=True)
+                if buffer.df is not None and not buffer.df.empty
+                else tail_df
+            )
+
+    trimmed = _trim_realtime_buffer_df(
+        df,
+        include_temperature=include_temperature,
+        ips=ips,
+        window_start=window_start,
+    )
+    updated_buffer = RealtimeInfluxBuffer(
+        df=trimmed,
+        ips=frozenset(ips),
+        interval_minutes=interval_minutes,
+        include_temperature=include_temperature,
+        last_window_end=end,
+    )
+    return trimmed, updated_buffer
 
 
 def get_ips_from_links_dict(
@@ -46,7 +222,9 @@ def load_data_from_influxdb(
     log_run_id: str = "default",
     realtime: bool = False,
     realtime_timewindow: str = "1d",
-) -> Tuple[pd.DataFrame, List[int], List[str]]:
+    realtime_buffer: Optional[RealtimeInfluxBuffer] = None,
+    force_realtime_refresh: bool = False,
+) -> Tuple[pd.DataFrame, List[int], List[str], Optional[RealtimeInfluxBuffer]]:
     """
     Fetch data from InfluxDB and return:
       - df: wide dataframe with columns [_time, agent_host, rx_power, tx_power] + optional [temperature]
@@ -64,11 +242,14 @@ def load_data_from_influxdb(
         )
 
         if realtime:
-            df = influx_man.query_units_realtime(
+            df, realtime_buffer = _load_realtime_data_from_influxdb(
+                influx_man,
                 ips=ips,
-                realtime_window_str=realtime_timewindow,
-                interval=config["time"]["step"],
+                interval_minutes=config["time"]["step"],
+                realtime_timewindow=realtime_timewindow,
                 include_temperature=need_temperature,
+                realtime_buffer=realtime_buffer,
+                force_refresh=force_realtime_refresh,
             )
         else:
             # compute warm-up samples for historic compensation
@@ -124,7 +305,7 @@ def load_data_from_influxdb(
             if need_temperature:
                 base_cols.insert(2, "temperature")
             empty_df = pd.DataFrame(columns=base_cols)
-            return empty_df, list(links.keys()), ips
+            return empty_df, list(links.keys()), ips, realtime_buffer
 
         # Determine missing IPs based on DataFrame
         present_ips = set(df["agent_host"].unique())
@@ -144,7 +325,7 @@ def load_data_from_influxdb(
             len(ips),
         )
 
-        return df, missing_links, ips
+        return df, missing_links, ips, realtime_buffer
 
     except BaseException as error:
         logger.error(
