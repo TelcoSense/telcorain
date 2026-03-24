@@ -7,11 +7,8 @@ import xarray as xr
 
 from telcorain.database.influx_manager import InfluxManager
 from telcorain.handlers import logger
-from telcorain.dataprocessing import (
-    RealtimeInfluxBuffer,
-    convert_to_link_datasets,
-    load_data_from_influxdb,
-)
+from telcorain.custom_data import is_influx_source, load_calc_data_for_source
+from telcorain.dataprocessing import RealtimeInfluxBuffer
 from telcorain.procedures.exceptions import (
     ProcessingException,
     RaincalcException,
@@ -63,13 +60,20 @@ class Calculation:
         self.last_time: np.datetime64 = np.datetime64(datetime.min)
         self.realtime_buffer = RealtimeInfluxBuffer()
         self.force_data_refresh = False
+        self.results_streamed = False
 
     # =====================================================================
     # RUN
     # =====================================================================
 
     @measure_time
-    def run(self, realtime_timewindow: str = "1d"):
+    def run(
+        self,
+        realtime_timewindow: str = "1d",
+        *,
+        historic_flush_every: int = 0,
+        historic_flush_callback=None,
+    ):
         """
         Unified RUN function that behaves either like realtime or historic calculation.
         """
@@ -96,10 +100,10 @@ class Calculation:
         )
 
         # =====================================================================
-        # 1. LOAD DATA FROM INFLUX
+        # 1. LOAD DATA FROM THE CONFIGURED SOURCE
         # =====================================================================
         try:
-            df, missing_links, ips, self.realtime_buffer = load_data_from_influxdb(
+            source_bundle = load_calc_data_for_source(
                 influx_man=self.influx_man,
                 config=self.config,
                 selected_links=self.selection,
@@ -117,25 +121,14 @@ class Calculation:
                 ),
             )
             self.force_data_refresh = False
+            self.realtime_buffer = source_bundle.realtime_buffer or RealtimeInfluxBuffer()
+            self.links = source_bundle.links
+            self.selection = source_bundle.selection
 
-            calc_data: list[xr.Dataset] = convert_to_link_datasets(
-                selected_links=self.selection,
-                links=self.links,
-                df=df,
-                missing_links=missing_links,
-                log_run_id=log_run_id,
-            )
-            # Keep time bounds for optional high-resolution queries (e.g. CNN wet/dry on 30 s)
-            df_time_min = None
-            df_time_max = None
-            try:
-                if df is not None and not df.empty and "_time" in df.columns:
-                    df_time_min = pd.to_datetime(df["_time"].min(), utc=True)
-                    df_time_max = pd.to_datetime(df["_time"].max(), utc=True)
-            except Exception:
-                df_time_min = None
-                df_time_max = None
-            del df
+            calc_data: list[xr.Dataset] = source_bundle.calc_data
+            ips = source_bundle.ips
+            df_time_min = source_bundle.time_min
+            df_time_max = source_bundle.time_max
 
         except ProcessingException:
             return
@@ -145,7 +138,7 @@ class Calculation:
         # =====================================================================
         try:
             wd_cfg = self.config.get("wet_dry", {})
-            if bool(wd_cfg.get("is_mlp_enabled", False)) and wd_cfg.get("cnn_model") not in [None, "", "polz"]:
+            if bool(wd_cfg.get("is_mlp_enabled", False)) and wd_cfg.get("cnn_model") not in [None, "", "polz"] and is_influx_source(self.config):
                 from telcorain.procedures.wet_dry.cnn_resample import (
                     compute_wet_mask_10min_from_30s,
                 )
@@ -218,6 +211,9 @@ class Calculation:
         # 3. RAINFIELDS (Unified)
         # =====================================================================
         try:
+            self.results_streamed = bool(
+                self.is_historic and historic_flush_callback is not None and historic_flush_every > 0
+            )
             result = generate_rainfields(
                 calc_data=calc_data,
                 config=self.config,
@@ -227,6 +223,8 @@ class Calculation:
                 realtime_runs=self.realtime_runs,
                 last_time=self.last_time,
                 log_run_id=log_run_id,
+                historic_flush_every=historic_flush_every,
+                historic_flush_callback=historic_flush_callback,
             )
 
             if not self.is_historic:

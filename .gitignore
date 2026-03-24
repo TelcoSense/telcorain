@@ -30,14 +30,7 @@ configs/*.ini
 
 # Output directories
 saved_grids/
-outputs/
-outputs_raw/
-outputs_web/
-outputs_center/
-outputs_sum/
-outputs_historic/
-outputs_json/
-outputs_sum_json/
+outputs*
 _backup/
 
 # OS

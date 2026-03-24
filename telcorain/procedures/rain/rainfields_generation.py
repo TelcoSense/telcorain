@@ -1,4 +1,4 @@
-import traceback
+﻿import traceback
 from typing import Any, Optional
 
 import numpy as np
@@ -32,6 +32,36 @@ def _to_float(val, default):
     return float(default)
 
 
+def _to_int(val, default):
+    return int(round(_to_float(val, default)))
+
+
+def _interpolate_grid_chunked(
+    interpolator,
+    *,
+    x_sites,
+    y_sites,
+    z_values,
+    x_grid,
+    y_grid,
+    chunk_rows: int,
+):
+    if chunk_rows <= 0 or chunk_rows >= x_grid.shape[0]:
+        return interpolator(x=x_sites, y=y_sites, z=z_values, xgrid=x_grid, ygrid=y_grid)
+
+    out = np.full(x_grid.shape, np.nan, dtype=float)
+    for row_start in range(0, x_grid.shape[0], chunk_rows):
+        row_end = min(x_grid.shape[0], row_start + chunk_rows)
+        out[row_start:row_end, :] = interpolator(
+            x=x_sites,
+            y=y_sites,
+            z=z_values,
+            xgrid=x_grid[row_start:row_end, :],
+            ygrid=y_grid[row_start:row_end, :],
+        )
+    return out
+
+
 @measure_time
 def generate_rainfields(
     calc_data: list[xr.Dataset],
@@ -43,6 +73,8 @@ def generate_rainfields(
     realtime_runs: int = 1,
     last_time: Optional[np.datetime64] = None,
     log_run_id: str = "default",
+    historic_flush_every: int = 0,
+    historic_flush_callback=None,
 ):
     """
     Generates spatial rainfields for:
@@ -121,14 +153,49 @@ def generate_rainfields(
             x_lo, x_hi = sorted([x_min_m, x_max_m])
             y_lo, y_hi = sorted([y_min_m, y_max_m])
 
+            step_raw = interp_cfg.get("grid_step_m", None)
             nx_cfg = interp_cfg.get("grid_nx", None)
             ny_cfg = interp_cfg.get("grid_ny", None)
 
-            if nx_cfg is not None and ny_cfg is not None:
+            if step_raw not in [None, ""]:
+                step_m = _to_float(step_raw, 1000.0)
+                width_m = x_hi - x_lo
+                height_m = y_hi - y_lo
+                nx = max(1, int(np.ceil(width_m / step_m)))
+                ny = max(1, int(np.ceil(height_m / step_m)))
+
+                # Keep truly square cells in projected space and center any remainder
+                # as symmetric padding around the requested bbox.
+                dx = step_m
+                dy = step_m
+                x_pad = max(0.0, nx * step_m - width_m) / 2.0
+                y_pad = max(0.0, ny * step_m - height_m) / 2.0
+                x_origin = x_lo - x_pad
+                y_origin = y_lo - y_pad
+                x_coords = x_origin + (np.arange(nx) + 0.5) * dx
+                y_coords = y_origin + (np.arange(ny) + 0.5) * dy
+                logger.debug(
+                    "[%s] Using exact Mercator grid_step_m=%.2f m -> nx=%d, ny=%d",
+                    log_run_id,
+                    step_m,
+                    nx,
+                    ny,
+                )
+                logger.debug(
+                    "[%s] Step-grid padded extent: x_origin=%.1f, y_origin=%.1f, width=%.1f m, height=%.1f m",
+                    log_run_id,
+                    x_origin,
+                    y_origin,
+                    nx * step_m,
+                    ny * step_m,
+                )
+            elif nx_cfg is not None and ny_cfg is not None:
                 nx = int(nx_cfg)
                 ny = int(ny_cfg)
                 dx = (x_hi - x_lo) / nx
                 dy = (y_hi - y_lo) / ny
+                x_coords = x_lo + (np.arange(nx) + 0.5) * dx
+                y_coords = y_lo + (np.arange(ny) + 0.5) * dy
                 logger.debug(
                     "[%s] Using explicit Mercator grid: nx=%d, ny=%d, dx=%.2f m, dy=%.2f m",
                     log_run_id,
@@ -138,23 +205,26 @@ def generate_rainfields(
                     dy,
                 )
             else:
-                step_m = _to_float(interp_cfg.get("grid_step_m", 1000.0), 1000.0)
-                nx = int(np.round((x_hi - x_lo) / step_m))
-                ny = int(np.round((y_hi - y_lo) / step_m))
-                dx = (x_hi - x_lo) / nx
-                dy = (y_hi - y_lo) / ny
+                step_m = 1000.0
+                width_m = x_hi - x_lo
+                height_m = y_hi - y_lo
+                nx = max(1, int(np.ceil(width_m / step_m)))
+                ny = max(1, int(np.ceil(height_m / step_m)))
+                dx = step_m
+                dy = step_m
+                x_pad = max(0.0, nx * step_m - width_m) / 2.0
+                y_pad = max(0.0, ny * step_m - height_m) / 2.0
+                x_origin = x_lo - x_pad
+                y_origin = y_lo - y_pad
+                x_coords = x_origin + (np.arange(nx) + 0.5) * dx
+                y_coords = y_origin + (np.arange(ny) + 0.5) * dy
                 logger.debug(
-                    "[%s] Using step_m ~ %.2f m -> nx=%d, ny=%d, dx=%.2f m, dy=%.2f m",
+                    "[%s] Falling back to exact Mercator grid_step_m=%.2f m -> nx=%d, ny=%d",
                     log_run_id,
                     step_m,
                     nx,
                     ny,
-                    dx,
-                    dy,
                 )
-
-            x_coords = x_lo + (np.arange(nx) + 0.5) * dx
-            y_coords = y_lo + (np.arange(ny) + 0.5) * dy
 
             logger.debug(
                 "[%s] Limits (deg): x_min=%.6f, x_max=%.6f, y_min=%.6f, y_max=%.6f",
@@ -165,8 +235,8 @@ def generate_rainfields(
                 y_max_deg,
             )
             logger.debug(
-                "[%s] Mercator extent: x_lo=%.1f, x_hi=%.1f (Δx=%.1f m), "
-                "y_lo=%.1f, y_hi=%.1f (Δy=%.1f m)",
+                "[%s] Mercator extent: x_lo=%.1f, x_hi=%.1f (Î”x=%.1f m), "
+                "y_lo=%.1f, y_hi=%.1f (Î”y=%.1f m)",
                 log_run_id,
                 x_lo,
                 x_hi,
@@ -199,6 +269,9 @@ def generate_rainfields(
 
         x_sites = ds_all.x_center.values
         y_sites = ds_all.y_center.values
+
+        chunk_rows_raw = interp_cfg.get("idw_chunk_rows", None)
+        chunk_rows = _to_int(chunk_rows_raw, 0) if chunk_rows_raw not in [None, ""] else 0
 
         nnear = int(interp_cfg["idw_near"])
         p = _to_float(interp_cfg["idw_power"], interp_cfg["idw_power"])
@@ -317,22 +390,53 @@ def generate_rainfields(
                     last_time,
                 )
 
+        stream_historic = bool(
+            is_historic and historic_flush_callback is not None and historic_flush_every > 0
+        )
+        chunk_time_indices: list[int] = []
+        interp_chunk_rows = chunk_rows if stream_historic else 0
+        if stream_historic:
+            logger.info(
+                "[%s] Streaming historic outputs every %d timesteps to reduce memory usage.",
+                log_run_id,
+                historic_flush_every,
+            )
+            if interp_chunk_rows > 0 and interp_chunk_rows < x_grid.shape[0]:
+                logger.info(
+                    "[%s] Using chunked interpolation with %d row chunks for grid %dx%d.",
+                    log_run_id,
+                    interp_chunk_rows,
+                    x_grid.shape[1],
+                    x_grid.shape[0],
+                )
+
         # --------------------------------------------------------------
         # 2d) Spatial interpolation only for selected timesteps
         # --------------------------------------------------------------
-        for i in time_indices:
+        total_steps = len(time_indices)
+        for step_idx, i in enumerate(time_indices, start=1):
+            if stream_historic and (step_idx == 1 or step_idx == total_steps or step_idx % 50 == 0):
+                logger.info(
+                    "[%s] Interpolating timestep %d/%d.",
+                    log_run_id,
+                    step_idx,
+                    total_steps,
+                )
+
             # ---- intensity mm/h ----
             z_t = np.asarray(z_all[:, i], dtype=float).copy()
 
             if dry_as_nan:
                 z_t[z_t == 0.0] = np.nan
 
-            grid = interpolator(
-                x=x_sites,
-                y=y_sites,
-                z=z_t,
-                xgrid=x_grid,
-                ygrid=y_grid,
+            grid = _interpolate_grid_chunked(
+                interpolator,
+                x_sites=x_sites,
+                y_sites=y_sites,
+                z_values=z_t,
+                x_grid=x_grid,
+                y_grid=y_grid,
+                chunk_rows=interp_chunk_rows,
             )
 
             grid[grid < min_rain] = 0.0
@@ -341,12 +445,14 @@ def generate_rainfields(
             # ---- hour-sum mm ----
             if hour_sum_enabled and z_hour_sum_all is not None:
                 zsum_t = z_hour_sum_all[:, i]
-                grid_sum = interpolator(
-                    x=x_sites,
-                    y=y_sites,
-                    z=zsum_t,
-                    xgrid=x_grid,
-                    ygrid=y_grid,
+                grid_sum = _interpolate_grid_chunked(
+                    interpolator,
+                    x_sites=x_sites,
+                    y_sites=y_sites,
+                    z_values=zsum_t,
+                    x_grid=x_grid,
+                    y_grid=y_grid,
+                    chunk_rows=interp_chunk_rows,
                 )
 
                 # keep NaNs transparent
@@ -357,13 +463,41 @@ def generate_rainfields(
 
                 out_rain_grids_sum.append(grid_sum)
 
+            if stream_historic:
+                chunk_time_indices.append(i)
+                if len(chunk_time_indices) >= historic_flush_every:
+                    historic_flush_callback(
+                        rain_grids=out_rain_grids,
+                        x_grid=x_grid,
+                        y_grid=y_grid,
+                        calc_dataset=calc_data_out.isel(time=chunk_time_indices),
+                        rain_grids_sum=(out_rain_grids_sum if hour_sum_enabled else None),
+                    )
+                    out_rain_grids = []
+                    out_rain_grids_sum = []
+                    chunk_time_indices = []
+
             if not is_historic:
                 last_time = times[i]
+
+        if stream_historic and chunk_time_indices:
+            historic_flush_callback(
+                rain_grids=out_rain_grids,
+                x_grid=x_grid,
+                y_grid=y_grid,
+                calc_dataset=calc_data_out.isel(time=chunk_time_indices),
+                rain_grids_sum=(out_rain_grids_sum if hour_sum_enabled else None),
+            )
+            out_rain_grids = []
+            out_rain_grids_sum = []
+            chunk_time_indices = []
 
         # --------------------------------------------------------------
         # 3) Return
         # --------------------------------------------------------------
         if is_historic:
+            if stream_historic:
+                return out_rain_grids, out_rain_grids_sum, calc_data_out.isel(time=slice(0, 0)), x_grid, y_grid
             return out_rain_grids, out_rain_grids_sum, calc_data_out, x_grid, y_grid
 
         return (
@@ -385,3 +519,5 @@ def generate_rainfields(
         )
         traceback.print_exc()
         raise RainfieldsGenException("Error during rainfall fields generation")
+
+

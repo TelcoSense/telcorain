@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import sleep
 
+from telcorain.custom_data import is_influx_source
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
 from telcorain.handlers import logger
@@ -70,6 +71,12 @@ class TelcorainCLI:
         If first is True, the first iteration uses retention_window instead of
         realtime_timewindow to save computation time.
         """
+        if not is_influx_source(self.config):
+            self.logger.error(
+                "run_cli.py supports only [data_source] mode=influx. Use run_custom.py for pycomlink/custom datasets."
+            )
+            return
+
         if first:
             try:
                 self._run_single_start(

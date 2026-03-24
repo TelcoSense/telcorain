@@ -7,6 +7,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+from telcorain.custom_data import load_links_for_source
 from telcorain.database.influx_manager import influx_man
 from telcorain.database.sql_manager import SqlManager
 from telcorain.handlers import logger
@@ -41,8 +42,10 @@ def run_hist_calc(cfg: dict):
     logger.info("Starting the historic calculation at: %s", start_time)
 
     sql_man = SqlManager()
-    links = sql_man.load_metadata(
-        ids=config["user_info"]["links_id"],
+    links = load_links_for_source(
+        config,
+        sql_man,
+        ids=config.get("user_info", {}).get("links_id"),
         min_length=config["cml"]["min_length"],
         max_length=config["cml"]["max_length"],
         exclude_ids=config["cml"]["exclude_cmls"],

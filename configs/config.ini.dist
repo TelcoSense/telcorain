@@ -67,6 +67,24 @@ metadata_refresh_interval_runs=60 ; set 0 to disable periodic MariaDB metadata r
 [historic]
 compensate_historic=True
 
+[data_source]
+mode=influx ; influx | pycomlink_example | pycomlink_netcdf | netherlands_raw_csv | openrainer_tar
+dataset_path=
+export_cml_metadata_json=False
+cml_metadata_json_filename=cml_metadata.json
+export_rain_event_summary_csv=False
+rain_event_summary_filename=rain_event_summary.csv
+auto_adjust_region=True ; auto-fit [limits] to custom dataset extent for non-influx sources
+region_padding_deg=0.3
+netherlands_file_glob=NEC_*.csv.gz
+netherlands_signal_stat=rxmin ; rxmin | rxmax | mid
+netherlands_polarization=V
+netherlands_mask_errored=True
+openrainer_cml_archive=CML.tar
+openrainer_reference_source=radadj ; radadj | radrain | radref | aws | none
+openrainer_export_reference_pngs=False
+openrainer_reference_manifest_filename=openrainer_reference_manifest.json
+
 [wet_dry]
 is_mlp_enabled=False
 cnn_model=ours
@@ -117,4 +135,3 @@ y_max=51.458
 [rendering]
 is_crop_enabled=True
 geojson_file=czechia.json
-map=plain_czechia.png

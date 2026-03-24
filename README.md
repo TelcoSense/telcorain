@@ -1,4 +1,4 @@
-# TelcoRain
+﻿# TelcoRain
 
 TelcoRain is a Python pipeline for estimating rainfall from commercial microwave link (CML) data.
 It reads link metadata from MariaDB, reads telemetry from InfluxDB, classifies wet and dry periods,
@@ -44,13 +44,13 @@ The output is used in the [TelcoSense platform](https://telcosense.cz/rain).
 ## Processing Flow
 
 ```text
-MariaDB metadata
+MariaDB metadata or custom dataset
     |
     v
-InfluxDB telemetry query
+InfluxDB telemetry query or pycomlink dataset loader
     |
     v
-load_data_from_influxdb()
+load_calc_data_for_source()
     |
     v
 convert_to_link_datasets()
@@ -125,6 +125,33 @@ CNN-based wet/dry workflows.
 `run_web.py` executes a calculation from a JSON configuration payload and writes results to web-facing
 output directories.
 
+### Custom dataset mode
+
+`run_custom.py` runs a one-shot calculation from a non-Influx source.
+
+It also supports `--cfg` with the same JSON override style as `run_web.py`, so a web app can keep a base INI config and override values such as the historic time window at runtime.
+
+Currently documented example configs:
+- `configs/config_pycomlink_example.ini` for the bundled pycomlink example dataset
+- `configs/config_netherlands.ini` for the public Netherlands raw CML dataset
+- `configs/config_openrainer.ini` for the OpenRainER Italy dataset
+
+Run them with:
+
+```bash
+python run_custom.py --config configs/config_pycomlink_example.ini
+python run_custom.py --config configs/config_netherlands.ini
+python run_custom.py --config configs/config_openrainer.ini
+```
+
+Example with a JSON time override:
+
+```bash
+python run_custom.py --config configs/config_openrainer.ini --cfg "{\"time\":{\"start\":\"2021-01-01T00:00:00Z\",\"end\":\"2021-01-01T06:00:00Z\"}}"
+```
+
+`run_cli.py` remains realtime-only and still expects `mode=influx`.
+
 ---
 
 ## Installation
@@ -170,6 +197,7 @@ The most important sections are:
 
 - `[influx2]`: InfluxDB URL, token, organization, and buckets.
 - `[mariadb]`: MariaDB connection and metadata database settings.
+- `[data_source]`: choose `influx`, `pycomlink_example`, or `pycomlink_netcdf`.
 - `[time]`: base input step, output step, and historic start/end range.
 - `[realtime]`: realtime window, retention window, and metadata refresh cadence.
 - `[cml]`: link filtering such as minimum and maximum link length.
@@ -227,6 +255,13 @@ python run_historic.py
 
 ```bash
 python run_web.py --cfg "{...json payload...}"
+```
+
+### Custom dataset run
+
+```bash
+python run_custom.py --config configs/config_openrainer.ini
+python run_custom.py --config configs/config_openrainer.ini --cfg "{\"time\":{\"start\":\"2021-01-01T00:00:00Z\",\"end\":\"2021-01-01T06:00:00Z\"}}"
 ```
 
 ---
@@ -408,3 +443,92 @@ Recovery Plan from the European Recovery and Resilience Facility.
   &nbsp;&nbsp;&nbsp;&nbsp;
   <img src="assets/eu.png" alt="European Union" height="64" />
 </p>
+
+## Custom Dataset Mode
+
+TelcoRain can now bypass MariaDB and InfluxDB for one-shot runs when `[data_source] mode`
+is set to a pycomlink-backed source.
+
+Supported modes:
+
+- `influx`
+- `pycomlink_example`
+- `pycomlink_netcdf`
+
+## Custom Dataset Examples
+
+The repository currently ships three ready-made non-Influx example configs for `run_custom.py`.
+
+> Note: The Netherlands and OpenRainER examples require local copies of the source datasets.
+> Netherlands raw CML dataset: https://data.4tu.nl/datasets/be252844-b672-471e-8d69-27269a862ec1/1
+> OpenRainER dataset: https://zenodo.org/records/14731404
+
+### 1. Pycomlink Example
+
+Config: `configs/config_pycomlink_example.ini`
+
+Use this for the packaged pycomlink demo dataset. It is helpful for quickly testing the custom-data path without downloading any extra open dataset.
+
+Highlights:
+- `[data_source] mode=pycomlink_example`
+- uses the bundled pycomlink NetCDF example data
+- exports `cml_metadata_example.json` into `outputs_json_example`
+- uses a fixed bbox and a dedicated example-region crop polygon
+
+Run it with:
+
+```bash
+python run_custom.py --config configs/config_pycomlink_example.ini
+```
+
+### 2. Netherlands Raw CSV Dataset
+
+Config: `configs/config_netherlands.ini`
+
+Use this for the public Netherlands raw CML dataset based on daily `NEC_*.csv.gz` files.
+
+Highlights:
+- `[data_source] mode=netherlands_raw_csv`
+- `dataset_path` should point to the extracted `RawCMLdata/RawCMLdata` directory
+- the dataset is natively 15-minute, so the example config uses `step=15` and `output_step=15`
+- raw coordinates are converted from milli-arcseconds to degrees internally
+- `netherlands_signal_stat` controls whether `RXMIN_1`, `RXMAX_1`, or their midpoint is used as the input signal
+- the example config uses `assets/nl.json` for cropping
+
+Run it with:
+
+```bash
+python run_custom.py --config configs/config_netherlands.ini
+```
+
+### 3. OpenRainER (Italy)
+
+Config: `configs/config_openrainer.ini`
+
+Use this for the OpenRainER dataset from Italy.
+
+Highlights:
+- `[data_source] mode=openrainer_tar` reads monthly `.nc.gz` members directly from `CML.tar`
+- the CML data are natively 1 minute and are resampled to the configured base step
+- the example config uses `step=15` to align with the 15-minute radar rainfall products
+- `openrainer_reference_source=radadj` exports gauge-adjusted radar rainfall PNGs to `outputs_reference_web_openrainer`
+- the OpenRainER radar products already carry regular `lat`/`lon` coordinates, so they are map-ready and do not need georeferencing reconstruction
+- the example config uses `assets/it.json` for cropping
+
+Run it with:
+
+```bash
+python run_custom.py --config configs/config_openrainer.ini
+```
+
+### Notes
+
+- `run_cli.py` remains realtime-only and still expects `mode=influx`.
+- `run_custom.py` accepts `--cfg` and deep-merges the JSON payload on top of the INI config, just like `run_web.py`.
+- `time.start` and `time.end` values passed through `--cfg` can be ISO timestamps such as `2021-01-01T00:00:00Z`.
+- The custom-data path can export a static CML inventory JSON for web-map reconstruction with `export_cml_metadata_json=True` under `[data_source]`.
+- The OpenRainER reference export writes separate radar-reference PNGs and a manifest so the web app can compare CML-derived maps with dataset reference products.
+
+
+
+
