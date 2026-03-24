@@ -21,8 +21,8 @@ ENV/
 *.swo
 *~
 
-# Config files (keep .dist templates)
-configs/*.ini
+# Config files (keep .dist templates and custom configs)
+configs/config.ini
 
 # Logs
 *.log
