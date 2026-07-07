@@ -79,6 +79,7 @@ class SqlManager:
         min_length: float = 0.01,
         max_length: float = float("inf"),
         exclude_ids: bool = True,
+        exclude_cmls_path: str | None = None,
     ) -> dict[int, MwLink]:
         """
         Load metadata of CMLs from MariaDB.
@@ -86,6 +87,7 @@ class SqlManager:
         :param ids: Optional list of link IDs to load.
         :param min_length: Minimum allowed link length (in km).
         :param max_length: Maximum allowed link length (in km).
+        :param exclude_cmls_path: Optional CSV path with invalid CML IDs.
         :return: Dictionary of CMLs metadata. Key is CML ID, value is MwLink model object.
         """
         try:
@@ -131,7 +133,15 @@ class SqlManager:
 
                 invalid_ids = set()
                 if exclude_ids:
-                    with open(str(self.settings["exclude_cmls_path"]), newline="") as f:
+                    if exclude_cmls_path is None:
+                        try:
+                            exclude_cmls_path = config_handler.read_option(
+                                "cml",
+                                "exclude_cmls_path",
+                            )
+                        except Exception:
+                            exclude_cmls_path = "cml_info/invalid_cmls.csv"
+                    with open(str(exclude_cmls_path), newline="") as f:
                         reader = csv.reader(f)
                         invalid_ids = {int(row[0]) for row in reader if row}
 

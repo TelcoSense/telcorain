@@ -201,6 +201,7 @@ The most important sections are:
 - `[time]`: base input step, output step, and historic start/end range.
 - `[realtime]`: realtime window, retention window, and metadata refresh cadence.
 - `[cml]`: link filtering such as minimum and maximum link length.
+- `[cml_filter]`: optional Influx-backed data quality filter for active CML IDs.
 - `[wet_dry]`: wet/dry classification settings.
 - `[temp]`: temperature filtering and compensation settings.
 - `[waa]`: wet-antenna attenuation method.
@@ -307,6 +308,21 @@ The cache is:
 - reset when the metadata selection changes
 
 This design allows the number of active CMLs to change over time without assuming a fixed matrix shape.
+
+### CML quality filter
+
+The optional `[cml_filter]` section validates selected MariaDB links against the telemetry that is actually available in InfluxDB.
+
+When enabled:
+
+- historic Influx runs inspect the selected CMLs before every calculation
+- realtime CLI runs inspect on startup when `run_realtime_at_start=True`
+- realtime CLI then repeats every `realtime_interval_runs`, usually `1000`
+- rejected CML IDs are kept in memory and masked out of the active selection until a later scan accepts them again
+
+The filter rejects links with missing endpoint IP data, low valid RSL coverage, implausible RSL/TSL values, or unusable `trsl = tsl - rsl` quality. Tune the thresholds in `[cml_filter]` if your network has a different signal-level range.
+
+Technology-specific sections such as `[cml_filter:ceragon_ip_50]` override the global thresholds for that technology. Static invalid CML IDs should normally live in the CML metadata exclusion file configured by `cml.exclude_cmls_path`, for example `cml_info/invalid_cmls.csv`, so they are removed before Influx queries.
 
 ---
 

@@ -56,6 +56,7 @@ def load_links_for_source(
             min_length=min_length,
             max_length=max_length,
             exclude_ids=exclude_ids,
+            exclude_cmls_path=config.get("cml", {}).get("exclude_cmls_path"),
         )
     return {}
 

@@ -104,6 +104,7 @@ class TelcorainCLI:
         links = self.sql_man.load_metadata(
             min_length=self.config["cml"]["min_length"],
             exclude_ids=self.config["cml"]["exclude_cmls"],
+            exclude_cmls_path=self.config["cml"].get("exclude_cmls_path"),
         )
         selected_links = select_all_links(links=links)
 
@@ -229,6 +230,8 @@ class TelcorainCLI:
             f"Realtime window: {self.config['realtime']['realtime_timewindow']}",
             f"Retention window: {self.config['realtime']['retention_window']}",
             f"Metadata refresh runs: {self.metadata_refresh_interval_runs}",
+            f"CML quality filter: {self.config.get('cml_filter', {}).get('enabled', False)}",
+            f"CML quality filter runs: {self.config.get('cml_filter', {}).get('realtime_interval_runs', 1000)}",
         ]
 
         logger.debug("Global config settings: " + "; ".join(config_info))
@@ -249,6 +252,7 @@ class TelcorainCLI:
             min_length=self.config["cml"]["min_length"],
             max_length=self.config["cml"]["max_length"],
             exclude_ids=self.config["cml"]["exclude_cmls"],
+            exclude_cmls_path=self.config["cml"].get("exclude_cmls_path"),
         )
 
     def _metadata_signature(self, links: dict) -> tuple:

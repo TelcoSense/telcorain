@@ -8,6 +8,7 @@ import xarray as xr
 from telcorain.database.influx_manager import InfluxManager
 from telcorain.handlers import logger
 from telcorain.custom_data import is_influx_source, load_calc_data_for_source
+from telcorain.cml_filter import CmlQualityFilter
 from telcorain.dataprocessing import RealtimeInfluxBuffer
 from telcorain.procedures.exceptions import (
     ProcessingException,
@@ -61,6 +62,7 @@ class Calculation:
         self.realtime_buffer = RealtimeInfluxBuffer()
         self.force_data_refresh = False
         self.results_streamed = False
+        self.cml_quality_filter = CmlQualityFilter(config)
 
     # =====================================================================
     # RUN
@@ -98,6 +100,26 @@ class Calculation:
         logger.info(
             f"[{log_run_id}] {further_info} rainfall calculation procedure started."
         )
+
+        if is_influx_source(self.config) and self.cml_quality_filter.should_run(
+            is_historic=self.is_historic,
+            realtime_run=self.realtime_runs,
+        ):
+            previous_selection = self.selection
+            self.selection = self.cml_quality_filter.inspect_and_filter(
+                influx_man=self.influx_man,
+                links=self.links,
+                selection=self.selection,
+                log_run_id=log_run_id,
+                is_historic=self.is_historic,
+                realtime_timewindow=(
+                    realtime_timewindow if not self.is_historic else "1d"
+                ),
+                realtime_run=self.realtime_runs,
+            )
+            if not self.is_historic and self.selection != previous_selection:
+                self.realtime_buffer = RealtimeInfluxBuffer()
+                self.force_data_refresh = True
 
         # =====================================================================
         # 1. LOAD DATA FROM THE CONFIGURED SOURCE
@@ -276,7 +298,7 @@ class Calculation:
         way to guarantee the next fetch fully reflects the new link set.
         """
         self.links = links
-        self.selection = selection
+        self.selection = self.cml_quality_filter.apply_known_exclusions(selection)
 
         if reset_realtime_buffer:
             self.realtime_buffer = RealtimeInfluxBuffer()

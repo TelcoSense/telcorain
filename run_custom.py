@@ -136,7 +136,7 @@ def run_custom(config_path: str = "configs/config.ini", cfg_updates: dict | None
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.ini", help="Path to config.ini")
-    parser.add_argument("--cfg", help="JSON string with config overrides (same style as run_web.py)")
+    parser.add_argument("--cfg", help="JSON string with config overrides")
     args = parser.parse_args()
     cfg_updates = json.loads(args.cfg) if args.cfg else None
     raise SystemExit(run_custom(args.config, cfg_updates=cfg_updates))
